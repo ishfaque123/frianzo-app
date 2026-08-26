@@ -5,9 +5,13 @@ on:
     branches: [ main ]
   workflow_dispatch: {}
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -29,8 +33,23 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
+      - name: Rename APK
+        run: |
+          mv app/build/outputs/apk/debug/*.apk app/build/outputs/apk/debug/EarnPro.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: EarnPro-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: EarnPro
+          path: app/build/outputs/apk/debug/EarnPro.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: EarnPro Latest
+          prerelease: false
+          make_latest: true
+          files: app/build/outputs/apk/debug/EarnPro.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
