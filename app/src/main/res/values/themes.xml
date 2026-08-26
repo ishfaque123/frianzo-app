@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.EarnPro" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/earnpro_navy</item>
+        <item name="colorPrimaryDark">@color/earnpro_navy</item>
+        <item name="colorAccent">@color/earnpro_gold</item>
+        <item name="android:statusBarColor">@color/earnpro_navy</item>
+        <item name="android:windowBackground">@color/earnpro_navy</item>
+    </style>
+</resources>
