@@ -5,26 +5,46 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Base64
 import android.view.KeyEvent
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.SecureRandom
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
     private lateinit var swipeRefresh: SwipeRefreshLayout
+    private lateinit var credentialManager: CredentialManager
 
     companion object {
         private const val SITE_URL = "https://frianzo.online"
         private const val SITE_HOST = "frianzo.online"
+        private const val API_URL = "https://api.frianzo.online"
         private const val API_HOST = "api.frianzo.online"
         private const val GOOGLE_START_PATH = "/api/auth/google/start"
         private const val OAUTH_SCHEME = "frianzo"
         private const val OAUTH_HOST = "oauth"
+        private const val GOOGLE_CONFIG_PATH = "/api/auth/google/native-config"
+        private const val GOOGLE_NATIVE_LOGIN_PATH = "/api/auth/google/native"
+        private const val HTTP_TIMEOUT_MS = 15000
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -34,6 +54,7 @@ class MainActivity : AppCompatActivity() {
 
         webView = findViewById(R.id.webview)
         swipeRefresh = findViewById(R.id.swipe_refresh)
+        credentialManager = CredentialManager.create(this)
 
         webView.settings.apply {
             javaScriptEnabled = true
@@ -97,24 +118,17 @@ class MainActivity : AppCompatActivity() {
         val host = uri.host?.lowercase()
         val path = uri.path
 
-        // Keep Frianzo website inside the app
         if ((scheme == "http" || scheme == "https") &&
             (host == SITE_HOST || host == "www.$SITE_HOST")
         ) {
             return false
         }
 
-        // Google OAuth cannot run inside Android WebView. Open the system
-        // browser, but mark the flow so the backend returns to this app.
         if (scheme == "https" && host == API_HOST && path == GOOGLE_START_PATH) {
-            val appUri = uri.buildUpon()
-                .clearQuery()
-                .appendQueryParameter("app", "1")
-                .build()
-            return openExternal(appUri)
+            launchNativeGoogleSignIn()
+            return true
         }
 
-        // Open external links using Android system
         try {
             when (scheme) {
                 "http", "https" -> {
@@ -175,6 +189,158 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun launchNativeGoogleSignIn() {
+        lifecycleScope.launch {
+            swipeRefresh.isRefreshing = false
+
+            try {
+                val serverClientId = withContext(Dispatchers.IO) {
+                    fetchGoogleServerClientId()
+                }
+                val nonce = generateSecureRandomNonce()
+
+                val googleIdOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(false)
+                    .setServerClientId(serverClientId)
+                    .setAutoSelectEnabled(false)
+                    .setNonce(nonce)
+                    .build()
+
+                val request = GetCredentialRequest.Builder()
+                    .addCredentialOption(googleIdOption)
+                    .build()
+
+                val result = credentialManager.getCredential(
+                    request = request,
+                    context = this@MainActivity
+                )
+
+                val credential = result.credential
+                if (credential !is CustomCredential ||
+                    credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+                ) {
+                    throw IllegalStateException("Unsupported Google credential")
+                }
+
+                val googleCredential = try {
+                    GoogleIdTokenCredential.createFrom(credential.data)
+                } catch (e: GoogleIdTokenParsingException) {
+                    throw IllegalStateException("Invalid Google credential", e)
+                }
+
+                val deviceToken = getCookieValue("vynzo_device")
+                val loginResult = withContext(Dispatchers.IO) {
+                    nativeGoogleLogin(
+                        idToken = googleCredential.idToken,
+                        nonce = nonce,
+                        deviceToken = deviceToken
+                    )
+                }
+
+                setAuthCookies(loginResult.token, loginResult.deviceToken)
+                val destination = if (loginResult.isNewUser) "/profile-setup" else "/"
+                webView.loadUrl("$SITE_URL$destination")
+            } catch (_: Exception) {
+                webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
+            }
+        }
+    }
+
+    private fun fetchGoogleServerClientId(): String {
+        val connection = (URL("$API_URL$GOOGLE_CONFIG_PATH").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = HTTP_TIMEOUT_MS
+            readTimeout = HTTP_TIMEOUT_MS
+            setRequestProperty("Accept", "application/json")
+        }
+
+        return try {
+            val response = connection.inputStream.bufferedReader().use { it.readText() }
+            val root = JSONObject(response)
+            val data = root.getJSONObject("data")
+            data.getString("clientId")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun nativeGoogleLogin(
+        idToken: String,
+        nonce: String,
+        deviceToken: String?
+    ): NativeLoginResult {
+        val connection = (URL("$API_URL$GOOGLE_NATIVE_LOGIN_PATH").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = HTTP_TIMEOUT_MS
+            readTimeout = HTTP_TIMEOUT_MS
+            doOutput = true
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Origin", SITE_URL)
+        }
+
+        val body = JSONObject().apply {
+            put("idToken", idToken)
+            put("nonce", nonce)
+            if (!deviceToken.isNullOrEmpty()) put("deviceToken", deviceToken)
+        }.toString()
+
+        return try {
+            connection.outputStream.bufferedWriter().use { it.write(body) }
+            val stream = if (connection.responseCode in 200..299) {
+                connection.inputStream
+            } else {
+                connection.errorStream
+            }
+            val response = stream?.bufferedReader()?.use { it.readText() }
+                ?: throw IllegalStateException("Empty authentication response")
+
+            if (connection.responseCode !in 200..299) {
+                throw IllegalStateException("Google authentication failed")
+            }
+
+            val data = JSONObject(response).getJSONObject("data")
+            NativeLoginResult(
+                token = data.getString("token"),
+                deviceToken = data.getString("deviceToken"),
+                isNewUser = data.getBoolean("isNewUser")
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun setAuthCookies(token: String, deviceToken: String) {
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setCookie(
+            API_URL,
+            "vynzo_token=$token; Path=/; Secure; HttpOnly"
+        )
+        cookieManager.setCookie(
+            API_URL,
+            "vynzo_device=$deviceToken; Path=/; Secure; HttpOnly"
+        )
+        cookieManager.flush()
+    }
+
+    private fun getCookieValue(name: String): String? {
+        val cookies = CookieManager.getInstance().getCookie(API_URL) ?: return null
+        return cookies.split(';')
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("$name=") }
+            ?.substringAfter('=')
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    private fun generateSecureRandomNonce(byteLength: Int = 32): String {
+        val bytes = ByteArray(byteLength)
+        SecureRandom().nextBytes(bytes)
+        return Base64.encodeToString(
+            bytes,
+            Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING
+        )
+    }
+
     private fun openExternal(uri: Uri): Boolean {
         return try {
             startActivity(Intent(Intent.ACTION_VIEW, uri))
@@ -206,20 +372,16 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val cookieManager = CookieManager.getInstance()
-        cookieManager.setCookie(
-            "https://$API_HOST",
-            "vynzo_token=$token; Path=/; Secure; HttpOnly"
-        )
-        cookieManager.setCookie(
-            "https://$API_HOST",
-            "vynzo_device=$deviceToken; Path=/; Secure; HttpOnly"
-        )
-        cookieManager.flush()
-
+        setAuthCookies(token, deviceToken)
         val destination = if (isNewUser) "/profile-setup" else "/"
         webView.loadUrl("$SITE_URL$destination")
     }
+
+    private data class NativeLoginResult(
+        val token: String,
+        val deviceToken: String,
+        val isNewUser: Boolean
+    )
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
