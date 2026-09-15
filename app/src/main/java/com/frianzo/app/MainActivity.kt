@@ -19,6 +19,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import kotlinx.coroutines.Dispatchers
@@ -117,7 +118,9 @@ class MainActivity : AppCompatActivity() {
             (host == SITE_HOST || host == "www.$SITE_HOST")
         ) return false
 
+        // Intercept Google login start — never open Chrome
         if (scheme == "https" && host == API_HOST && path == GOOGLE_START_PATH) {
+            Log.i(TAG, "Intercepted Google start URL, launching native sign-in")
             launchNativeGoogleSignIn()
             return true
         }
@@ -163,6 +166,7 @@ class MainActivity : AppCompatActivity() {
         serverClientId: String,
         nonce: String
     ): androidx.credentials.GetCredentialResponse {
+        // Primary: Google ID bottom sheet
         val googleIdOption = GetGoogleIdOption.Builder()
             .setFilterByAuthorizedAccounts(false)
             .setServerClientId(serverClientId)
@@ -174,24 +178,47 @@ class MainActivity : AppCompatActivity() {
             .addCredentialOption(googleIdOption)
             .build()
 
-        // Use the real foreground Activity context. This is the context that
-        // successfully presents Google's native account chooser bottom sheet.
-        return credentialManager.getCredential(
-            request = googleIdRequest,
-            context = this@MainActivity
-        )
+        return try {
+            Log.i(TAG, "Trying GetGoogleIdOption (native account chooser)")
+            credentialManager.getCredential(
+                request = googleIdRequest,
+                context = this@MainActivity
+            )
+        } catch (primaryError: Exception) {
+            Log.w(TAG, "GetGoogleIdOption failed, falling back to GetSignInWithGoogleOption", primaryError)
+
+            // Fallback that previously opened the account chooser successfully
+            val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId)
+                .setNonce(nonce)
+                .build()
+
+            val signInRequest = GetCredentialRequest.Builder()
+                .addCredentialOption(signInWithGoogleOption)
+                .build()
+
+            Log.i(TAG, "Trying GetSignInWithGoogleOption fallback")
+            credentialManager.getCredential(
+                request = signInRequest,
+                context = this@MainActivity
+            )
+        }
     }
 
     private fun launchNativeGoogleSignIn() {
         lifecycleScope.launch {
             swipeRefresh.isRefreshing = false
             try {
+                Log.i(TAG, "Step 1: Fetching server client ID")
                 val serverClientId = withContext(Dispatchers.IO) { fetchGoogleServerClientId() }
                 require(serverClientId.isNotBlank()) { "Google server client ID is empty" }
+                Log.i(TAG, "Step 1 OK: clientId length=${serverClientId.length}")
 
                 val nonce = generateSecureRandomNonce()
+                Log.i(TAG, "Step 2: Requesting Google credential (nonce ready)")
+
                 val result = getGoogleCredential(serverClientId, nonce)
                 val credential = result.credential
+                Log.i(TAG, "Step 2 OK: credential type=${credential.type}")
 
                 if (credential !is CustomCredential ||
                     credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
@@ -204,6 +231,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (e: GoogleIdTokenParsingException) {
                     throw IllegalStateException("Invalid Google ID credential", e)
                 }
+                Log.i(TAG, "Step 3: Got ID token, calling backend /native")
 
                 val deviceToken = getCookieValue("vynzo_device")
                 val loginResult = withContext(Dispatchers.IO) {
@@ -213,12 +241,14 @@ class MainActivity : AppCompatActivity() {
                         deviceToken = deviceToken
                     )
                 }
+                Log.i(TAG, "Step 4 OK: backend auth success, isNewUser=${loginResult.isNewUser}")
 
                 setAuthCookies(loginResult.token, loginResult.deviceToken)
                 val destination = if (loginResult.isNewUser) "/profile-setup" else "/"
                 webView.loadUrl("$SITE_URL$destination")
+                Log.i(TAG, "Step 5: Cookies set, navigating to $destination")
             } catch (e: Exception) {
-                Log.e(TAG, "Native Google sign-in failed", e)
+                Log.e(TAG, "Native Google sign-in failed: ${e.javaClass.simpleName}: ${e.message}", e)
                 webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
             }
         }
@@ -302,8 +332,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getCookieValue(name: String): String? {
-        val cookies = CookieManager.getInstance().getCookie(API_URL) ?: return null
-        return cookies.split(';').map { it.trim() }
+        val cookieManager = CookieManager.getInstance()
+        val fromApi = cookieManager.getCookie(API_URL)
+        val fromSite = cookieManager.getCookie(SITE_URL)
+        val all = listOfNotNull(fromApi, fromSite).joinToString(";")
+        if (all.isBlank()) return null
+        return all.split(';').map { it.trim() }
             .firstOrNull { it.startsWith("$name=") }
             ?.substringAfter('=')
             ?.takeIf { it.isNotEmpty() }
