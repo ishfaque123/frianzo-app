@@ -3,7 +3,6 @@ package com.frianzo.app
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.content.MutableContextWrapper
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -71,19 +70,12 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
 
         webView.webViewClient = object : WebViewClient() {
-
-            override fun shouldOverrideUrlLoading(
-                view: WebView,
-                request: WebResourceRequest
-            ): Boolean {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 return handleUrl(request.url)
             }
 
             @Deprecated("Deprecated in API 24")
-            override fun shouldOverrideUrlLoading(
-                view: WebView,
-                url: String
-            ): Boolean {
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
                 return handleUrl(Uri.parse(url))
             }
 
@@ -93,9 +85,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        swipeRefresh.setOnRefreshListener {
-            webView.reload()
-        }
+        swipeRefresh.setOnRefreshListener { webView.reload() }
 
         if (savedInstanceState == null) {
             val oauthUri = intent?.data
@@ -123,9 +113,7 @@ class MainActivity : AppCompatActivity() {
 
         if ((scheme == "http" || scheme == "https") &&
             (host == SITE_HOST || host == "www.$SITE_HOST")
-        ) {
-            return false
-        }
+        ) return false
 
         if (scheme == "https" && host == API_HOST && path == GOOGLE_START_PATH) {
             launchNativeGoogleSignIn()
@@ -134,48 +122,28 @@ class MainActivity : AppCompatActivity() {
 
         try {
             when (scheme) {
-                "http", "https" -> {
-                    return openExternal(uri)
-                }
-
-                "whatsapp" -> {
-                    return openExternal(uri)
-                }
-
+                "http", "https" -> return openExternal(uri)
+                "whatsapp" -> return openExternal(uri)
                 "intent" -> {
-                    val intent = Intent.parseUri(
-                        uri.toString(),
-                        Intent.URI_INTENT_SCHEME
-                    )
-
+                    val intent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
                     try {
                         startActivity(intent)
                     } catch (e: ActivityNotFoundException) {
                         val fallbackUrl = intent.getStringExtra("browser_fallback_url")
-
                         if (!fallbackUrl.isNullOrEmpty()) {
-                            startActivity(
-                                Intent(
-                                    Intent.ACTION_VIEW,
-                                    Uri.parse(fallbackUrl)
-                                )
-                            )
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl)))
                         }
                     }
-
                     return true
                 }
-
                 "market" -> {
                     startActivity(Intent(Intent.ACTION_VIEW, uri))
                     return true
                 }
-
                 "tel", "mailto" -> {
                     startActivity(Intent(Intent.ACTION_VIEW, uri))
                     return true
                 }
-
                 else -> {
                     startActivity(Intent(Intent.ACTION_VIEW, uri))
                     return true
@@ -183,10 +151,7 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             if (scheme == "http" || scheme == "https") {
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, uri))
-                } catch (_: Exception) {
-                }
+                try { startActivity(Intent(Intent.ACTION_VIEW, uri)) } catch (_: Exception) {}
             }
             return true
         }
@@ -207,36 +172,29 @@ class MainActivity : AppCompatActivity() {
             .addCredentialOption(googleIdOption)
             .build()
 
-        // Credential Manager's official bottom-sheet flow requires a foreground
-        // Activity-aware context. A MutableContextWrapper keeps that Activity
-        // context valid for the native system UI lifecycle.
-        val activityContext = MutableContextWrapper(this@MainActivity)
+        // Use the real foreground Activity context. This is the context that
+        // successfully presents Google's native account chooser bottom sheet.
         return credentialManager.getCredential(
             request = googleIdRequest,
-            context = activityContext
+            context = this@MainActivity
         )
     }
 
     private fun launchNativeGoogleSignIn() {
         lifecycleScope.launch {
             swipeRefresh.isRefreshing = false
-
             try {
-                val serverClientId = withContext(Dispatchers.IO) {
-                    fetchGoogleServerClientId()
-                }
+                val serverClientId = withContext(Dispatchers.IO) { fetchGoogleServerClientId() }
                 require(serverClientId.isNotBlank()) { "Google server client ID is empty" }
 
                 val nonce = generateSecureRandomNonce()
                 val result = getGoogleCredential(serverClientId, nonce)
-
                 val credential = result.credential
+
                 if (credential !is CustomCredential ||
                     credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
                 ) {
-                    throw IllegalStateException(
-                        "Unsupported Google credential type: ${credential.type}"
-                    )
+                    throw IllegalStateException("Unsupported Google credential type: ${credential.type}")
                 }
 
                 val googleCredential = try {
@@ -258,8 +216,6 @@ class MainActivity : AppCompatActivity() {
                 val destination = if (loginResult.isNewUser) "/profile-setup" else "/"
                 webView.loadUrl("$SITE_URL$destination")
             } catch (e: Exception) {
-                // Keep the user-facing message simple, but log the exact native
-                // failure so the next diagnosis does not hide the real cause.
                 Log.e(TAG, "Native Google sign-in failed", e)
                 webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
             }
@@ -272,23 +228,25 @@ class MainActivity : AppCompatActivity() {
             connectTimeout = HTTP_TIMEOUT_MS
             readTimeout = HTTP_TIMEOUT_MS
             setRequestProperty("Accept", "application/json")
+            setRequestProperty("Origin", SITE_URL)
         }
 
         return try {
-            val response = connection.inputStream.bufferedReader().use { it.readText() }
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }
+                ?: throw IllegalStateException("Empty Google config response (HTTP $responseCode)")
+            if (responseCode !in 200..299) {
+                throw IllegalStateException("Google config request failed: HTTP $responseCode $response")
+            }
             val root = JSONObject(response)
-            val data = root.getJSONObject("data")
-            data.getString("clientId")
+            root.getJSONObject("data").getString("clientId")
         } finally {
             connection.disconnect()
         }
     }
 
-    private fun nativeGoogleLogin(
-        idToken: String,
-        nonce: String,
-        deviceToken: String?
-    ): NativeLoginResult {
+    private fun nativeGoogleLogin(idToken: String, nonce: String, deviceToken: String?): NativeLoginResult {
         val connection = (URL("$API_URL$GOOGLE_NATIVE_LOGIN_PATH").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = HTTP_TIMEOUT_MS
@@ -307,18 +265,13 @@ class MainActivity : AppCompatActivity() {
 
         return try {
             connection.outputStream.bufferedWriter().use { it.write(body) }
-            val stream = if (connection.responseCode in 200..299) {
-                connection.inputStream
-            } else {
-                connection.errorStream
-            }
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
             val response = stream?.bufferedReader()?.use { it.readText() }
                 ?: throw IllegalStateException("Empty authentication response")
 
-            if (connection.responseCode !in 200..299) {
-                throw IllegalStateException(
-                    "Google authentication failed: HTTP ${connection.responseCode} $response"
-                )
+            if (responseCode !in 200..299) {
+                throw IllegalStateException("Google authentication failed: HTTP $responseCode $response")
             }
 
             val data = JSONObject(response).getJSONObject("data")
@@ -334,21 +287,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun setAuthCookies(token: String, deviceToken: String) {
         val cookieManager = CookieManager.getInstance()
-        cookieManager.setCookie(
-            API_URL,
-            "vynzo_token=$token; Path=/; Secure; HttpOnly"
-        )
-        cookieManager.setCookie(
-            API_URL,
-            "vynzo_device=$deviceToken; Path=/; Secure; HttpOnly"
-        )
+        cookieManager.setCookie(API_URL, "vynzo_token=$token; Path=/; Secure; HttpOnly")
+        cookieManager.setCookie(API_URL, "vynzo_device=$deviceToken; Path=/; Secure; HttpOnly")
         cookieManager.flush()
     }
 
     private fun getCookieValue(name: String): String? {
         val cookies = CookieManager.getInstance().getCookie(API_URL) ?: return null
-        return cookies.split(';')
-            .map { it.trim() }
+        return cookies.split(';').map { it.trim() }
             .firstOrNull { it.startsWith("$name=") }
             ?.substringAfter('=')
             ?.takeIf { it.isNotEmpty() }
@@ -357,26 +303,18 @@ class MainActivity : AppCompatActivity() {
     private fun generateSecureRandomNonce(byteLength: Int = 32): String {
         val bytes = ByteArray(byteLength)
         SecureRandom().nextBytes(bytes)
-        return Base64.encodeToString(
-            bytes,
-            Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING
-        )
+        return Base64.encodeToString(bytes, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
     }
 
-    private fun openExternal(uri: Uri): Boolean {
-        return try {
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
-            true
-        } catch (_: ActivityNotFoundException) {
-            false
-        }
-    }
+    private fun openExternal(uri: Uri): Boolean = try {
+        startActivity(Intent(Intent.ACTION_VIEW, uri))
+        true
+    } catch (_: ActivityNotFoundException) { false }
 
-    private fun isOAuthCallback(uri: Uri): Boolean {
-        return uri.scheme.equals(OAUTH_SCHEME, ignoreCase = true) &&
+    private fun isOAuthCallback(uri: Uri): Boolean =
+        uri.scheme.equals(OAUTH_SCHEME, ignoreCase = true) &&
             uri.host.equals(OAUTH_HOST, ignoreCase = true) &&
             uri.path.equals("/callback", ignoreCase = true)
-    }
 
     private fun handleOAuthCallback(uri: Uri) {
         val error = uri.getQueryParameter("error")
