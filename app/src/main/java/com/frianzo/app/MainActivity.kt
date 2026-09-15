@@ -18,6 +18,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import kotlinx.coroutines.Dispatchers
@@ -189,6 +190,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private suspend fun getGoogleCredential(
+        serverClientId: String,
+        nonce: String
+    ): androidx.credentials.GetCredentialResponse {
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(serverClientId)
+            .setAutoSelectEnabled(false)
+            .setNonce(nonce)
+            .build()
+
+        val googleIdRequest = GetCredentialRequest.Builder()
+            .addCredentialOption(googleIdOption)
+            .build()
+
+        return try {
+            credentialManager.getCredential(
+                request = googleIdRequest,
+                context = this@MainActivity
+            )
+        } catch (_: Exception) {
+            val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(
+                serverClientId
+            )
+                .setNonce(nonce)
+                .build()
+
+            val signInRequest = GetCredentialRequest.Builder()
+                .addCredentialOption(signInWithGoogleOption)
+                .build()
+
+            credentialManager.getCredential(
+                request = signInRequest,
+                context = this@MainActivity
+            )
+        }
+    }
+
     private fun launchNativeGoogleSignIn() {
         lifecycleScope.launch {
             swipeRefresh.isRefreshing = false
@@ -198,22 +237,7 @@ class MainActivity : AppCompatActivity() {
                     fetchGoogleServerClientId()
                 }
                 val nonce = generateSecureRandomNonce()
-
-                val googleIdOption = GetGoogleIdOption.Builder()
-                    .setFilterByAuthorizedAccounts(false)
-                    .setServerClientId(serverClientId)
-                    .setAutoSelectEnabled(false)
-                    .setNonce(nonce)
-                    .build()
-
-                val request = GetCredentialRequest.Builder()
-                    .addCredentialOption(googleIdOption)
-                    .build()
-
-                val result = credentialManager.getCredential(
-                    request = request,
-                    context = this@MainActivity
-                )
+                val result = getGoogleCredential(serverClientId, nonce)
 
                 val credential = result.credential
                 if (credential !is CustomCredential ||
