@@ -67,7 +67,9 @@ class MainActivity : AppCompatActivity() {
             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
         }
 
-        CookieManager.getInstance().setAcceptCookie(true)
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setAcceptCookie(true)
+        cookieManager.setAcceptThirdPartyCookies(webView, true)
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -287,8 +289,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun setAuthCookies(token: String, deviceToken: String) {
         val cookieManager = CookieManager.getInstance()
-        cookieManager.setCookie(API_URL, "vynzo_token=$token; Path=/; Secure; HttpOnly")
-        cookieManager.setCookie(API_URL, "vynzo_device=$deviceToken; Path=/; Secure; HttpOnly")
+        cookieManager.setAcceptCookie(true)
+        cookieManager.setAcceptThirdPartyCookies(webView, true)
+
+        val opts = "Path=/; Secure; SameSite=None; Domain=.frianzo.online"
+
+        cookieManager.setCookie(API_URL, "vynzo_token=$token; $opts")
+        cookieManager.setCookie(API_URL, "vynzo_device=$deviceToken; $opts")
+        cookieManager.setCookie(SITE_URL, "vynzo_token=$token; $opts")
+        cookieManager.setCookie(SITE_URL, "vynzo_device=$deviceToken; $opts")
         cookieManager.flush()
     }
 
