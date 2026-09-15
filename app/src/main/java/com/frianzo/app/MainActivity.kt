@@ -3,9 +3,11 @@ package com.frianzo.app
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.MutableContextWrapper
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
+import android.util.Log
 import android.view.KeyEvent
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
@@ -18,7 +20,6 @@ import androidx.credentials.GetCredentialRequest
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var credentialManager: CredentialManager
 
     companion object {
+        private const val TAG = "FrianzoGoogleAuth"
         private const val SITE_URL = "https://frianzo.online"
         private const val SITE_HOST = "frianzo.online"
         private const val API_URL = "https://api.frianzo.online"
@@ -205,27 +207,14 @@ class MainActivity : AppCompatActivity() {
             .addCredentialOption(googleIdOption)
             .build()
 
-        return try {
-            credentialManager.getCredential(
-                request = googleIdRequest,
-                context = this@MainActivity
-            )
-        } catch (_: Exception) {
-            val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(
-                serverClientId
-            )
-                .setNonce(nonce)
-                .build()
-
-            val signInRequest = GetCredentialRequest.Builder()
-                .addCredentialOption(signInWithGoogleOption)
-                .build()
-
-            credentialManager.getCredential(
-                request = signInRequest,
-                context = this@MainActivity
-            )
-        }
+        // Credential Manager's Google bottom sheet must use a foreground-aware
+        // activity context. A MutableContextWrapper also survives activity
+        // recreation and avoids undefined system-UI launch behavior.
+        val mutableContext = MutableContextWrapper(this@MainActivity)
+        return credentialManager.getCredential(
+            request = googleIdRequest,
+            context = mutableContext
+        )
     }
 
     private fun launchNativeGoogleSignIn() {
@@ -236,6 +225,8 @@ class MainActivity : AppCompatActivity() {
                 val serverClientId = withContext(Dispatchers.IO) {
                     fetchGoogleServerClientId()
                 }
+                require(serverClientId.isNotBlank()) { "Google server client ID is empty" }
+
                 val nonce = generateSecureRandomNonce()
                 val result = getGoogleCredential(serverClientId, nonce)
 
@@ -243,13 +234,15 @@ class MainActivity : AppCompatActivity() {
                 if (credential !is CustomCredential ||
                     credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
                 ) {
-                    throw IllegalStateException("Unsupported Google credential")
+                    throw IllegalStateException(
+                        "Unsupported Google credential type: ${credential.type}"
+                    )
                 }
 
                 val googleCredential = try {
                     GoogleIdTokenCredential.createFrom(credential.data)
                 } catch (e: GoogleIdTokenParsingException) {
-                    throw IllegalStateException("Invalid Google credential", e)
+                    throw IllegalStateException("Invalid Google ID credential", e)
                 }
 
                 val deviceToken = getCookieValue("vynzo_device")
@@ -264,7 +257,10 @@ class MainActivity : AppCompatActivity() {
                 setAuthCookies(loginResult.token, loginResult.deviceToken)
                 val destination = if (loginResult.isNewUser) "/profile-setup" else "/"
                 webView.loadUrl("$SITE_URL$destination")
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // Keep the user-facing message simple, but log the exact native
+                // failure so the next diagnosis does not hide the real cause.
+                Log.e(TAG, "Native Google sign-in failed", e)
                 webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
             }
         }
@@ -320,7 +316,9 @@ class MainActivity : AppCompatActivity() {
                 ?: throw IllegalStateException("Empty authentication response")
 
             if (connection.responseCode !in 200..299) {
-                throw IllegalStateException("Google authentication failed")
+                throw IllegalStateException(
+                    "Google authentication failed: HTTP ${connection.responseCode} $response"
+                )
             }
 
             val data = JSONObject(response).getJSONObject("data")
