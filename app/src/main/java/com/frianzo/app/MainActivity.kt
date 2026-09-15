@@ -207,12 +207,13 @@ class MainActivity : AppCompatActivity() {
             .addCredentialOption(googleIdOption)
             .build()
 
-        // Credential Manager's Google bottom sheet must be launched with the
-        // actual foreground Activity context. Passing a wrapper context here
-        // prevents the native account chooser from being presented correctly.
+        // Credential Manager's official bottom-sheet flow requires a foreground
+        // Activity-aware context. A MutableContextWrapper keeps that Activity
+        // context valid for the native system UI lifecycle.
+        val activityContext = MutableContextWrapper(this@MainActivity)
         return credentialManager.getCredential(
             request = googleIdRequest,
-            context = this@MainActivity
+            context = activityContext
         )
     }
 
