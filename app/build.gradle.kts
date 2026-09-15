@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace = "com.earnpro.app"
-    compileSdk = 34
+    namespace = "com.frianzo.app"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.earnpro.app"
+        applicationId = "com.frianzo.app"
         minSdk = 23
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
