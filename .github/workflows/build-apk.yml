@@ -1,4 +1,4 @@
-name: Build EarnPro APK
+name: Build Frianzo Android App
 
 on:
   push:
@@ -25,6 +25,9 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Android 36 SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -33,23 +36,34 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
+      - name: Build release AAB
+        run: gradle bundleRelease --no-daemon
+
       - name: Rename APK
         run: |
-          mv app/build/outputs/apk/debug/*.apk app/build/outputs/apk/debug/EarnPro.apk
+          mv app/build/outputs/apk/debug/*.apk app/build/outputs/apk/debug/Frianzo.apk
 
-      - name: Upload APK artifact
+      - name: Copy AAB
+        run: |
+          cp app/build/outputs/bundle/release/*.aab app/build/outputs/bundle/release/Frianzo-release.aab
+
+      - name: Upload APK and AAB artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: EarnPro
-          path: app/build/outputs/apk/debug/EarnPro.apk
+          name: Frianzo-Android
+          path: |
+            app/build/outputs/apk/debug/Frianzo.apk
+            app/build/outputs/bundle/release/Frianzo-release.aab
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: EarnPro Latest
+          name: Frianzo Latest
           prerelease: false
           make_latest: true
-          files: app/build/outputs/apk/debug/EarnPro.apk
+          files: |
+            app/build/outputs/apk/debug/Frianzo.apk
+            app/build/outputs/bundle/release/Frianzo-release.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
