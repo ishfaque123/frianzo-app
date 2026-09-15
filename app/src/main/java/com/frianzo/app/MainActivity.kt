@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
+import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -20,6 +21,10 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val SITE_URL = "https://frianzo.online"
         private const val SITE_HOST = "frianzo.online"
+        private const val API_HOST = "api.frianzo.online"
+        private const val GOOGLE_START_PATH = "/api/auth/google/start"
+        private const val OAUTH_SCHEME = "frianzo"
+        private const val OAUTH_HOST = "oauth"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -38,6 +43,8 @@ class MainActivity : AppCompatActivity() {
             setSupportZoom(false)
             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
         }
+
+        CookieManager.getInstance().setAcceptCookie(true)
 
         webView.webViewClient = object : WebViewClient() {
 
@@ -67,13 +74,28 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (savedInstanceState == null) {
-            webView.loadUrl(SITE_URL)
+            val oauthUri = intent?.data
+            if (oauthUri != null && isOAuthCallback(oauthUri)) {
+                webView.post { handleOAuthCallback(oauthUri) }
+            } else {
+                webView.loadUrl(SITE_URL)
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val oauthUri = intent?.data
+        if (oauthUri != null && isOAuthCallback(oauthUri)) {
+            handleOAuthCallback(oauthUri)
         }
     }
 
     private fun handleUrl(uri: Uri): Boolean {
         val scheme = uri.scheme?.lowercase() ?: return false
         val host = uri.host?.lowercase()
+        val path = uri.path
 
         // Keep Frianzo website inside the app
         if ((scheme == "http" || scheme == "https") &&
@@ -82,19 +104,25 @@ class MainActivity : AppCompatActivity() {
             return false
         }
 
+        // Google OAuth cannot run inside Android WebView. Open the system
+        // browser, but mark the flow so the backend returns to this app.
+        if (scheme == "https" && host == API_HOST && path == GOOGLE_START_PATH) {
+            val appUri = uri.buildUpon()
+                .clearQuery()
+                .appendQueryParameter("app", "1")
+                .build()
+            return openExternal(appUri)
+        }
+
         // Open external links using Android system
         try {
             when (scheme) {
                 "http", "https" -> {
-                    val intent = Intent(Intent.ACTION_VIEW, uri)
-                    startActivity(intent)
-                    return true
+                    return openExternal(uri)
                 }
 
                 "whatsapp" -> {
-                    val intent = Intent(Intent.ACTION_VIEW, uri)
-                    startActivity(intent)
-                    return true
+                    return openExternal(uri)
                 }
 
                 "intent" -> {
@@ -137,20 +165,60 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            // If the required app isn't installed, try browser for web links
             if (scheme == "http" || scheme == "https") {
                 try {
-                    startActivity(
-                        Intent(
-                            Intent.ACTION_VIEW,
-                            uri
-                        )
-                    )
+                    startActivity(Intent(Intent.ACTION_VIEW, uri))
                 } catch (_: Exception) {
                 }
             }
             return true
         }
+    }
+
+    private fun openExternal(uri: Uri): Boolean {
+        return try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        }
+    }
+
+    private fun isOAuthCallback(uri: Uri): Boolean {
+        return uri.scheme.equals(OAUTH_SCHEME, ignoreCase = true) &&
+            uri.host.equals(OAUTH_HOST, ignoreCase = true) &&
+            uri.path.equals("/callback", ignoreCase = true)
+    }
+
+    private fun handleOAuthCallback(uri: Uri) {
+        val error = uri.getQueryParameter("error")
+        if (!error.isNullOrEmpty()) {
+            webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
+            return
+        }
+
+        val token = uri.getQueryParameter("token")
+        val deviceToken = uri.getQueryParameter("device")
+        val isNewUser = uri.getQueryParameter("newUser") == "1"
+
+        if (token.isNullOrEmpty() || deviceToken.isNullOrEmpty()) {
+            webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
+            return
+        }
+
+        val cookieManager = CookieManager.getInstance()
+        cookieManager.setCookie(
+            "https://$API_HOST",
+            "vynzo_token=$token; Path=/; Secure; HttpOnly"
+        )
+        cookieManager.setCookie(
+            "https://$API_HOST",
+            "vynzo_device=$deviceToken; Path=/; Secure; HttpOnly"
+        )
+        cookieManager.flush()
+
+        val destination = if (isNewUser) "/profile-setup" else "/"
+        webView.loadUrl("$SITE_URL$destination")
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
