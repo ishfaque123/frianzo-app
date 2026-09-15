@@ -30,6 +30,14 @@ jobs:
       - name: Install Android 36 SDK
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Download Frianzo logo from frontend
+        run: |
+          curl -fL "https://raw.githubusercontent.com/ishfaque123/vynzo-frontend/main/public/logo.png" -o /tmp/frianzo-logo.png
+          for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            cp /tmp/frianzo-logo.png "app/src/main/res/mipmap-$dir/ic_launcher.png"
+            cp /tmp/frianzo-logo.png "app/src/main/res/mipmap-$dir/ic_launcher_round.png"
+          done
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
