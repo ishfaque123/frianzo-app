@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "EarnPro"
+rootProject.name = "Frianzo"
 include(":app")
