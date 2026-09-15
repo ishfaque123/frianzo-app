@@ -1,4 +1,4 @@
-package com.earnpro.app
+package com.frianzo.app
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
@@ -18,8 +18,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
 
     companion object {
-        private const val SITE_URL = "https://earnpro.site"
-        private const val SITE_HOST = "earnpro.site"
+        private const val SITE_URL = "https://frianzo.online"
+        private const val SITE_HOST = "frianzo.online"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -75,7 +75,7 @@ class MainActivity : AppCompatActivity() {
         val scheme = uri.scheme?.lowercase() ?: return false
         val host = uri.host?.lowercase()
 
-        // Keep EarnPro website inside the app
+        // Keep Frianzo website inside the app
         if ((scheme == "http" || scheme == "https") &&
             (host == SITE_HOST || host == "www.$SITE_HOST")
         ) {
