@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
+import android.widget.Toast
 import android.view.KeyEvent
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
@@ -248,8 +249,12 @@ class MainActivity : AppCompatActivity() {
                 webView.loadUrl("$SITE_URL$destination")
                 Log.i(TAG, "Step 5: Cookies set, navigating to $destination")
             } catch (e: Exception) {
-                Log.e(TAG, "Native Google sign-in failed: ${e.javaClass.simpleName}: ${e.message}", e)
-                webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
+                val errMsg = "${e.javaClass.simpleName}: ${e.message}"
+                Log.e(TAG, "Native Google sign-in failed: $errMsg", e)
+                // Show real error on screen (no PC / logcat needed)
+                Toast.makeText(this@MainActivity, errMsg, Toast.LENGTH_LONG).show()
+                val encoded = Uri.encode(errMsg.take(180))
+                webView.loadUrl("$SITE_URL/login?error=google_auth_failed&msg=$encoded")
             }
         }
     }
