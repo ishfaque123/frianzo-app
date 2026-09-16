@@ -164,15 +164,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun getGoogleCredential(
-        serverClientId: String,
-        nonce: String
-    ): androidx.credentials.GetCredentialResponse {
-        // Primary: Google ID bottom sheet
+        serverClientId: String
+    ): GoogleCredentialResult {
+        // Each Google credential request gets its own fresh nonce.
+        // This is required because the fallback is a separate Sign in with Google request.
+        val primaryNonce = generateSecureRandomNonce()
         val googleIdOption = GetGoogleIdOption.Builder()
             .setFilterByAuthorizedAccounts(false)
             .setServerClientId(serverClientId)
             .setAutoSelectEnabled(false)
-            .setNonce(nonce)
+            .setNonce(primaryNonce)
             .build()
 
         val googleIdRequest = GetCredentialRequest.Builder()
@@ -181,27 +182,30 @@ class MainActivity : AppCompatActivity() {
 
         return try {
             Log.i(TAG, "Trying GetGoogleIdOption (native account chooser)")
-            credentialManager.getCredential(
+            val response = credentialManager.getCredential(
                 request = googleIdRequest,
                 context = this@MainActivity
             )
+            GoogleCredentialResult(response, primaryNonce)
         } catch (primaryError: Exception) {
             Log.w(TAG, "GetGoogleIdOption failed, falling back to GetSignInWithGoogleOption", primaryError)
 
-            // Fallback that previously opened the account chooser successfully
+            // IMPORTANT: this is a new Credential Manager request, so it must use a new nonce.
+            val fallbackNonce = generateSecureRandomNonce()
             val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId)
-                .setNonce(nonce)
+                .setNonce(fallbackNonce)
                 .build()
 
             val signInRequest = GetCredentialRequest.Builder()
                 .addCredentialOption(signInWithGoogleOption)
                 .build()
 
-            Log.i(TAG, "Trying GetSignInWithGoogleOption fallback")
-            credentialManager.getCredential(
+            Log.i(TAG, "Trying GetSignInWithGoogleOption fallback with a fresh nonce")
+            val response = credentialManager.getCredential(
                 request = signInRequest,
                 context = this@MainActivity
             )
+            GoogleCredentialResult(response, fallbackNonce)
         }
     }
 
@@ -214,11 +218,10 @@ class MainActivity : AppCompatActivity() {
                 require(serverClientId.isNotBlank()) { "Google server client ID is empty" }
                 Log.i(TAG, "Step 1 OK: clientId length=${serverClientId.length}")
 
-                val nonce = generateSecureRandomNonce()
-                Log.i(TAG, "Step 2: Requesting Google credential (nonce ready)")
-
-                val result = getGoogleCredential(serverClientId, nonce)
-                val credential = result.credential
+                Log.i(TAG, "Step 2: Requesting Google credential")
+                val credentialResult = getGoogleCredential(serverClientId)
+                val credential = credentialResult.response.credential
+                val nonce = credentialResult.nonce
                 Log.i(TAG, "Step 2 OK: credential type=${credential.type}")
 
                 if (credential !is CustomCredential ||
@@ -251,7 +254,6 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 val errMsg = "${e.javaClass.simpleName}: ${e.message}"
                 Log.e(TAG, "Native Google sign-in failed: $errMsg", e)
-                // Show real error on screen (no PC / logcat needed)
                 Toast.makeText(this@MainActivity, errMsg, Toast.LENGTH_LONG).show()
                 val encoded = Uri.encode(errMsg.take(180))
                 webView.loadUrl("$SITE_URL/login?error=google_auth_failed&msg=$encoded")
@@ -384,6 +386,11 @@ class MainActivity : AppCompatActivity() {
         val destination = if (isNewUser) "/profile-setup" else "/"
         webView.loadUrl("$SITE_URL$destination")
     }
+
+    private data class GoogleCredentialResult(
+        val response: androidx.credentials.GetCredentialResponse,
+        val nonce: String
+    )
 
     private data class NativeLoginResult(
         val token: String,
