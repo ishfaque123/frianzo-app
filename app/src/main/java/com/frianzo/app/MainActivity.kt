@@ -327,7 +327,6 @@ class MainActivity : AppCompatActivity() {
         cookieManager.setAcceptCookie(true)
         cookieManager.setAcceptThirdPartyCookies(webView, true)
 
-        // Cross-subdomain cookies so both frianzo.online and api.frianzo.online work
         val opts = "Path=/; Secure; SameSite=None; Domain=.frianzo.online"
 
         cookieManager.setCookie(API_URL, "vynzo_token=$token; $opts")
