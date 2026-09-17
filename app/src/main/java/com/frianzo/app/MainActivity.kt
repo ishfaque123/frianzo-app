@@ -267,22 +267,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun generateDiagnosticMessage(error: Throwable): String {
-        val messages = mutableListOf<String>()
-        var current: Throwable? = error
-        while (current != null && messages.size < 4) {
-            val message = current.message?.trim()
-            if (!message.isNullOrEmpty() && !messages.contains(message)) {
-                messages.add(message)
-            }
-            current = current.cause
-        }
         return buildString {
-            append(error.javaClass.simpleName)
-            if (messages.isNotEmpty()) {
-                append(": ")
-                append(messages.joinToString(" | "))
-            }
-        }.take(1000)
+            append("Message: ")
+            append(error.message ?: error.localizedMessage ?: "<none>")
+            append("\nCause: ")
+            append(error.cause?.message ?: "<none>")
+            append("\nException: ")
+            append(error.toString())
+        }.take(2000)
     }
 
     private fun fetchGoogleServerClientId(): String {
