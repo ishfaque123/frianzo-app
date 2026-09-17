@@ -1,6 +1,7 @@
 package com.frianzo.app
 
 import android.annotation.SuppressLint
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -119,7 +120,6 @@ class MainActivity : AppCompatActivity() {
             (host == SITE_HOST || host == "www.$SITE_HOST")
         ) return false
 
-        // Intercept Google login start — never open Chrome
         if (scheme == "https" && host == API_HOST && path == GOOGLE_START_PATH) {
             Log.i(TAG, "Intercepted Google start URL, launching native sign-in")
             launchNativeGoogleSignIn()
@@ -163,10 +163,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private suspend fun getGoogleCredential(
-        serverClientId: String
-    ): GoogleCredentialResult {
-        // Clear any previous credential state to avoid "Account reauth failed"
+    private suspend fun getGoogleCredential(serverClientId: String): GoogleCredentialResult {
         try {
             credentialManager.clearCredentialState(ClearCredentialStateRequest())
             Log.i(TAG, "Cleared previous credential state")
@@ -174,7 +171,6 @@ class MainActivity : AppCompatActivity() {
             Log.w(TAG, "clearCredentialState failed (safe to ignore)", e)
         }
 
-        // Use the more reliable "Sign in with Google" button flow
         val nonce = generateSecureRandomNonce()
         val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId)
             .setNonce(nonce)
@@ -235,13 +231,35 @@ class MainActivity : AppCompatActivity() {
                 webView.loadUrl("$SITE_URL$destination")
                 Log.i(TAG, "Step 5: Cookies set, navigating to $destination")
             } catch (e: Exception) {
-                val errMsg = "${e.javaClass.simpleName}: ${e.message}"
-                Log.e(TAG, "Native Google sign-in failed: $errMsg", e)
-                Toast.makeText(this@MainActivity, errMsg, Toast.LENGTH_LONG).show()
-                val encoded = Uri.encode(errMsg.take(180))
-                webView.loadUrl("$SITE_URL/login?error=google_auth_failed&msg=$encoded")
+                val cause = generateDiagnosticMessage(e)
+                Log.e(TAG, "Native Google sign-in failed: $cause", e)
+                Toast.makeText(this@MainActivity, cause, Toast.LENGTH_LONG).show()
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Google Login Failed")
+                    .setMessage(cause)
+                    .setPositiveButton("OK", null)
+                    .show()
             }
         }
+    }
+
+    private fun generateDiagnosticMessage(error: Throwable): String {
+        val messages = mutableListOf<String>()
+        var current: Throwable? = error
+        while (current != null && messages.size < 4) {
+            val message = current.message?.trim()
+            if (!message.isNullOrEmpty() && !messages.contains(message)) {
+                messages.add(message)
+            }
+            current = current.cause
+        }
+        return buildString {
+            append(error.javaClass.simpleName)
+            if (messages.isNotEmpty()) {
+                append(": ")
+                append(messages.joinToString(" | "))
+            }
+        }.take(1000)
     }
 
     private fun fetchGoogleServerClientId(): String {
@@ -290,7 +308,7 @@ class MainActivity : AppCompatActivity() {
             val responseCode = connection.responseCode
             val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
             val response = stream?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Empty authentication response")
+                ?: throw IllegalStateException("Empty authentication response (HTTP $responseCode)")
 
             if (responseCode !in 200..299) {
                 throw IllegalStateException("Google authentication failed: HTTP $responseCode $response")
