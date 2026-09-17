@@ -15,9 +15,9 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
-import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialException
 import androidx.credentials.GetCredentialRequest
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
@@ -164,13 +164,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun getGoogleCredential(serverClientId: String): GoogleCredentialResult {
-        try {
-            credentialManager.clearCredentialState(ClearCredentialStateRequest())
-            Log.i(TAG, "Cleared previous credential state")
-        } catch (e: Exception) {
-            Log.w(TAG, "clearCredentialState failed (safe to ignore)", e)
-        }
-
         val nonce = generateSecureRandomNonce()
         val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId)
             .setNonce(nonce)
@@ -230,23 +223,43 @@ class MainActivity : AppCompatActivity() {
                 val destination = if (loginResult.isNewUser) "/profile-setup" else "/"
                 webView.loadUrl("$SITE_URL$destination")
                 Log.i(TAG, "Step 5: Cookies set, navigating to $destination")
+            } catch (e: GetCredentialException) {
+                val cause = generateDiagnosticMessage(e)
+                Log.e(TAG, "Credential Manager sign-in failed: $cause", e)
+                showGoogleLoginError("Credential Manager", cause)
             } catch (e: Exception) {
                 val cause = generateDiagnosticMessage(e)
                 Log.e(TAG, "Native Google sign-in failed: $cause", e)
-                Toast.makeText(this@MainActivity, cause, Toast.LENGTH_LONG).show()
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Google Login Failed")
-                    .setMessage(cause)
-                    .setPositiveButton("OK", null)
-                    .show()
+                showGoogleLoginError("Google Login", cause)
             }
         }
+    }
+
+    private fun showGoogleLoginError(stage: String, cause: String) {
+        val diagnostic = buildString {
+            appendLine("Stage: $stage")
+            appendLine("Error: $cause")
+            appendLine()
+            appendLine("App package: com.frianzo.app")
+            appendLine("Site: frianzo.online")
+            appendLine("Credential Manager: 1.7.0-alpha03")
+            appendLine("Google ID library: 1.2.0")
+            appendLine()
+            appendLine("This failure occurred before backend login if Stage is Credential Manager.")
+        }.take(1800)
+
+        Toast.makeText(this, cause, Toast.LENGTH_LONG).show()
+        AlertDialog.Builder(this)
+            .setTitle("Google Login Failed")
+            .setMessage(diagnostic)
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun generateDiagnosticMessage(error: Throwable): String {
         val messages = mutableListOf<String>()
         var current: Throwable? = error
-        while (current != null && messages.size < 4) {
+        while (current != null && messages.size < 8) {
             val message = current.message?.trim()
             if (!message.isNullOrEmpty() && !messages.contains(message)) {
                 messages.add(message)
@@ -254,166 +267,10 @@ class MainActivity : AppCompatActivity() {
             current = current.cause
         }
         return buildString {
-            append(error.javaClass.simpleName)
+            append(error.javaClass.name)
             if (messages.isNotEmpty()) {
                 append(": ")
                 append(messages.joinToString(" | "))
             }
-        }.take(1000)
+        }.take(1400)
     }
-
-    private fun fetchGoogleServerClientId(): String {
-        val connection = (URL("$API_URL$GOOGLE_CONFIG_PATH").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = HTTP_TIMEOUT_MS
-            readTimeout = HTTP_TIMEOUT_MS
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Origin", SITE_URL)
-        }
-
-        return try {
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Empty Google config response (HTTP $responseCode)")
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("Google config request failed: HTTP $responseCode $response")
-            }
-            val root = JSONObject(response)
-            root.getJSONObject("data").getString("clientId")
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun nativeGoogleLogin(idToken: String, nonce: String, deviceToken: String?): NativeLoginResult {
-        val connection = (URL("$API_URL$GOOGLE_NATIVE_LOGIN_PATH").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = HTTP_TIMEOUT_MS
-            readTimeout = HTTP_TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Origin", SITE_URL)
-        }
-
-        val body = JSONObject().apply {
-            put("idToken", idToken)
-            put("nonce", nonce)
-            if (!deviceToken.isNullOrEmpty()) put("deviceToken", deviceToken)
-        }.toString()
-
-        return try {
-            connection.outputStream.bufferedWriter().use { it.write(body) }
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Empty authentication response (HTTP $responseCode)")
-
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("Google authentication failed: HTTP $responseCode $response")
-            }
-
-            val data = JSONObject(response).getJSONObject("data")
-            NativeLoginResult(
-                token = data.getString("token"),
-                deviceToken = data.getString("deviceToken"),
-                isNewUser = data.getBoolean("isNewUser")
-            )
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun setAuthCookies(token: String, deviceToken: String) {
-        val cookieManager = CookieManager.getInstance()
-        cookieManager.setAcceptCookie(true)
-        cookieManager.setAcceptThirdPartyCookies(webView, true)
-
-        val opts = "Path=/; Secure; SameSite=None; Domain=.frianzo.online"
-
-        cookieManager.setCookie(API_URL, "vynzo_token=$token; $opts")
-        cookieManager.setCookie(API_URL, "vynzo_device=$deviceToken; $opts")
-        cookieManager.setCookie(SITE_URL, "vynzo_token=$token; $opts")
-        cookieManager.setCookie(SITE_URL, "vynzo_device=$deviceToken; $opts")
-        cookieManager.flush()
-    }
-
-    private fun getCookieValue(name: String): String? {
-        val cookieManager = CookieManager.getInstance()
-        val fromApi = cookieManager.getCookie(API_URL)
-        val fromSite = cookieManager.getCookie(SITE_URL)
-        val all = listOfNotNull(fromApi, fromSite).joinToString(";")
-        if (all.isBlank()) return null
-        return all.split(';').map { it.trim() }
-            .firstOrNull { it.startsWith("$name=") }
-            ?.substringAfter('=')
-            ?.takeIf { it.isNotEmpty() }
-    }
-
-    private fun generateSecureRandomNonce(byteLength: Int = 32): String {
-        val bytes = ByteArray(byteLength)
-        SecureRandom().nextBytes(bytes)
-        return Base64.encodeToString(bytes, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
-    }
-
-    private fun openExternal(uri: Uri): Boolean = try {
-        startActivity(Intent(Intent.ACTION_VIEW, uri))
-        true
-    } catch (_: ActivityNotFoundException) { false }
-
-    private fun isOAuthCallback(uri: Uri): Boolean =
-        uri.scheme.equals(OAUTH_SCHEME, ignoreCase = true) &&
-            uri.host.equals(OAUTH_HOST, ignoreCase = true) &&
-            uri.path.equals("/callback", ignoreCase = true)
-
-    private fun handleOAuthCallback(uri: Uri) {
-        val error = uri.getQueryParameter("error")
-        if (!error.isNullOrEmpty()) {
-            webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
-            return
-        }
-
-        val token = uri.getQueryParameter("token")
-        val deviceToken = uri.getQueryParameter("device")
-        val isNewUser = uri.getQueryParameter("newUser") == "1"
-
-        if (token.isNullOrEmpty() || deviceToken.isNullOrEmpty()) {
-            webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
-            return
-        }
-
-        setAuthCookies(token, deviceToken)
-        val destination = if (isNewUser) "/profile-setup" else "/"
-        webView.loadUrl("$SITE_URL$destination")
-    }
-
-    private data class GoogleCredentialResult(
-        val response: androidx.credentials.GetCredentialResponse,
-        val nonce: String
-    )
-
-    private data class NativeLoginResult(
-        val token: String,
-        val deviceToken: String,
-        val isNewUser: Boolean
-    )
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
-            webView.goBack()
-            return true
-        }
-        return super.onKeyDown(keyCode, event)
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        webView.saveState(outState)
-    }
-
-    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
-        super.onRestoreInstanceState(savedInstanceState)
-        webView.restoreState(savedInstanceState)
-    }
-}
