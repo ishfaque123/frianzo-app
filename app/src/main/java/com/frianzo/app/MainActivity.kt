@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.content.MutableContextWrapper
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -16,6 +15,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -175,17 +175,22 @@ class MainActivity : AppCompatActivity() {
             .addCredentialOption(signInWithGoogleOption)
             .build()
 
-        val mutableContext = MutableContextWrapper(this@MainActivity)
-
         Log.i(TAG, "Requesting GetSignInWithGoogleOption with fresh nonce")
         return try {
             val response = credentialManager.getCredential(
                 request = request,
-                context = mutableContext
+                context = this@MainActivity
             )
             GoogleCredentialResult(response, nonce)
         } catch (e: GetCredentialException) {
-            Log.w(TAG, "Primary Google button flow failed; retrying with GetGoogleIdOption", e)
+            Log.w(TAG, "Primary Google button flow failed; clearing credential state and retrying", e)
+
+            try {
+                credentialManager.clearCredentialState(ClearCredentialStateRequest())
+                Log.i(TAG, "Credential state cleared after primary Google failure")
+            } catch (clearError: Exception) {
+                Log.w(TAG, "Unable to clear credential state before retry", clearError)
+            }
 
             val fallbackNonce = generateSecureRandomNonce()
             val googleIdOption = GetGoogleIdOption.Builder()
@@ -199,7 +204,7 @@ class MainActivity : AppCompatActivity() {
 
             val response = credentialManager.getCredential(
                 request = fallbackRequest,
-                context = mutableContext
+                context = this@MainActivity
             )
             Log.i(TAG, "Fallback Google ID flow succeeded")
             GoogleCredentialResult(response, fallbackNonce)
