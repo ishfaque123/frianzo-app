@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.MutableContextWrapper
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -174,11 +175,13 @@ class MainActivity : AppCompatActivity() {
             .addCredentialOption(signInWithGoogleOption)
             .build()
 
+        val mutableContext = MutableContextWrapper(this@MainActivity)
+
         Log.i(TAG, "Requesting GetSignInWithGoogleOption with fresh nonce")
         return try {
             val response = credentialManager.getCredential(
                 request = request,
-                context = this@MainActivity
+                context = mutableContext
             )
             GoogleCredentialResult(response, nonce)
         } catch (e: GetCredentialException) {
@@ -196,7 +199,7 @@ class MainActivity : AppCompatActivity() {
 
             val response = credentialManager.getCredential(
                 request = fallbackRequest,
-                context = this@MainActivity
+                context = mutableContext
             )
             Log.i(TAG, "Fallback Google ID flow succeeded")
             GoogleCredentialResult(response, fallbackNonce)
