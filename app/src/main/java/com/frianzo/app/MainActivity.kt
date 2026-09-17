@@ -18,8 +18,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -173,11 +175,32 @@ class MainActivity : AppCompatActivity() {
             .build()
 
         Log.i(TAG, "Requesting GetSignInWithGoogleOption with fresh nonce")
-        val response = credentialManager.getCredential(
-            request = request,
-            context = this@MainActivity
-        )
-        return GoogleCredentialResult(response, nonce)
+        return try {
+            val response = credentialManager.getCredential(
+                request = request,
+                context = this@MainActivity
+            )
+            GoogleCredentialResult(response, nonce)
+        } catch (e: GetCredentialException) {
+            Log.w(TAG, "Primary Google button flow failed; retrying with GetGoogleIdOption", e)
+
+            val fallbackNonce = generateSecureRandomNonce()
+            val googleIdOption = GetGoogleIdOption.Builder()
+                .setFilterByAuthorizedAccounts(false)
+                .setServerClientId(serverClientId)
+                .setNonce(fallbackNonce)
+                .build()
+            val fallbackRequest = GetCredentialRequest.Builder()
+                .addCredentialOption(googleIdOption)
+                .build()
+
+            val response = credentialManager.getCredential(
+                request = fallbackRequest,
+                context = this@MainActivity
+            )
+            Log.i(TAG, "Fallback Google ID flow succeeded")
+            GoogleCredentialResult(response, fallbackNonce)
+        }
     }
 
     private fun launchNativeGoogleSignIn() {
