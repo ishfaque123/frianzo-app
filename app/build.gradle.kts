@@ -30,7 +30,7 @@ android {
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("release")
+            // Use the standard Android debug keystore for APK testing.
         }
         release {
             signingConfig = signingConfigs.getByName("release")
