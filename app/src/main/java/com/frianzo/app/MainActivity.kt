@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.MutableContextWrapper
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -15,7 +16,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
-import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -184,7 +184,7 @@ class MainActivity : AppCompatActivity() {
         return try {
             val response = credentialManager.getCredential(
                 request = request,
-                context = this@MainActivity
+                context = MutableContextWrapper(this@MainActivity)
             )
             Log.i(TAG, "Google ID credential flow succeeded")
             GoogleCredentialResult(response, nonce)
