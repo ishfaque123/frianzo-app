@@ -59,6 +59,11 @@ jobs:
 
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
+        env:
+          KEYSTORE_PATH: frianzo-release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: frianzo
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Build release AAB
         run: gradle bundleRelease --no-daemon
