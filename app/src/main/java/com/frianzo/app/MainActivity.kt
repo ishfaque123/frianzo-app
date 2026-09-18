@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.MutableContextWrapper
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -15,7 +16,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
-import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -23,7 +23,6 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import kotlinx.coroutines.Dispatchers
@@ -167,48 +166,24 @@ class MainActivity : AppCompatActivity() {
 
     private suspend fun getGoogleCredential(serverClientId: String): GoogleCredentialResult {
         val nonce = generateSecureRandomNonce()
-        val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId)
+        val googleIdOption = GetGoogleIdOption.Builder()
+            .setFilterByAuthorizedAccounts(false)
+            .setServerClientId(serverClientId)
             .setNonce(nonce)
             .build()
 
         val request = GetCredentialRequest.Builder()
-            .addCredentialOption(signInWithGoogleOption)
+            .addCredentialOption(googleIdOption)
             .build()
 
-        Log.i(TAG, "Requesting GetSignInWithGoogleOption with fresh nonce")
-        return try {
-            val response = credentialManager.getCredential(
-                request = request,
-                context = this@MainActivity
-            )
-            GoogleCredentialResult(response, nonce)
-        } catch (e: GetCredentialException) {
-            Log.w(TAG, "Primary Google button flow failed; clearing credential state and retrying", e)
-
-            try {
-                credentialManager.clearCredentialState(ClearCredentialStateRequest())
-                Log.i(TAG, "Credential state cleared after primary Google failure")
-            } catch (clearError: Exception) {
-                Log.w(TAG, "Unable to clear credential state before retry", clearError)
-            }
-
-            val fallbackNonce = generateSecureRandomNonce()
-            val googleIdOption = GetGoogleIdOption.Builder()
-                .setFilterByAuthorizedAccounts(false)
-                .setServerClientId(serverClientId)
-                .setNonce(fallbackNonce)
-                .build()
-            val fallbackRequest = GetCredentialRequest.Builder()
-                .addCredentialOption(googleIdOption)
-                .build()
-
-            val response = credentialManager.getCredential(
-                request = fallbackRequest,
-                context = this@MainActivity
-            )
-            Log.i(TAG, "Fallback Google ID flow succeeded")
-            GoogleCredentialResult(response, fallbackNonce)
-        }
+        Log.i(TAG, "Requesting Google ID credential with all accounts allowed")
+        val mutableContext = MutableContextWrapper(this@MainActivity)
+        val response = credentialManager.getCredential(
+            request = request,
+            context = mutableContext
+        )
+        Log.i(TAG, "Google ID credential flow succeeded")
+        return GoogleCredentialResult(response, nonce)
     }
 
     private fun launchNativeGoogleSignIn() {
