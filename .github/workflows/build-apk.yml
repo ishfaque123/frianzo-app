@@ -46,6 +46,17 @@ jobs:
       - name: Decode release keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > frianzo-release.keystore
 
+      - name: Print Release Keystore SHA-1 and SHA-256
+        run: |
+          echo "========================================"
+          echo "=== Release Keystore Fingerprints ==="
+          echo "========================================"
+          keytool -list -v -keystore frianzo-release.keystore -alias frianzo -storepass "${{ secrets.KEYSTORE_PASSWORD }}" -keypass "${{ secrets.KEY_PASSWORD }}" | grep -E "(SHA1|SHA256|Owner|Alias name):"
+          echo "========================================"
+          echo "Copy the SHA1 and SHA256 values above"
+          echo "and add them in Firebase Console"
+          echo "========================================"
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
