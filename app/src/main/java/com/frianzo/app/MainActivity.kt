@@ -22,6 +22,9 @@ import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -52,6 +55,7 @@ class MainActivity : AppCompatActivity() {
         private const val GOOGLE_CONFIG_PATH = "/api/auth/google/native-config"
         private const val GOOGLE_NATIVE_LOGIN_PATH = "/api/auth/google/native"
         private const val HTTP_TIMEOUT_MS = 15000
+        private const val LEGACY_GOOGLE_SIGN_IN_REQUEST = 9001
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -219,6 +223,8 @@ class MainActivity : AppCompatActivity() {
                 val serverClientId = withContext(Dispatchers.IO) { fetchGoogleServerClientId() }
                 require(serverClientId.isNotBlank()) { "Google server client ID is empty" }
                 Log.i(TAG, "Step 1 OK: clientId length=${serverClientId.length}")
+                launchLegacyGoogleSignInDebug(serverClientId)
+                return@launch
 
                 Log.i(TAG, "Step 2: Requesting Google credential")
                 val credentialResult = getGoogleCredential(serverClientId)
@@ -262,6 +268,57 @@ class MainActivity : AppCompatActivity() {
                     .setMessage(cause)
                     .setPositiveButton("OK", null)
                     .show()
+            }
+        }
+    }
+
+    // TEMP DEBUG ONLY
+    private fun launchLegacyGoogleSignInDebug(serverClientId: String) {
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(serverClientId)
+            .requestEmail()
+            .build()
+
+        val client = GoogleSignIn.getClient(this, gso)
+        startActivityForResult(client.signInIntent, LEGACY_GOOGLE_SIGN_IN_REQUEST)
+    }
+
+    override fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?
+    ) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode == LEGACY_GOOGLE_SIGN_IN_REQUEST) {
+            try {
+                val account = GoogleSignIn
+                    .getSignedInAccountFromIntent(data)
+                    .getResult(ApiException::class.java)
+
+                Log.e(
+                    "LEGACY_GOOGLE_DEBUG",
+                    "SUCCESS: account=\${account?.email}"
+                )
+
+                Toast.makeText(
+                    this,
+                    "Legacy Google Sign-In succeeded",
+                    Toast.LENGTH_LONG
+                ).show()
+
+            } catch (e: ApiException) {
+                Log.e(
+                    "LEGACY_GOOGLE_DEBUG",
+                    "ApiException statusCode=\${e.statusCode}, message=\${e.message}",
+                    e
+                )
+
+                Toast.makeText(
+                    this,
+                    "Legacy Google error: statusCode=\${e.statusCode}\n\${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
