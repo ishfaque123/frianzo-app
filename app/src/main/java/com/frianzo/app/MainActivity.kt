@@ -310,13 +310,13 @@ class MainActivity : AppCompatActivity() {
             } catch (e: ApiException) {
                 Log.e(
                     "LEGACY_GOOGLE_DEBUG",
-                    "ApiException statusCode=\${e.statusCode}, message=\${e.message}",
+                    "ApiException statusCode=${e.statusCode}, message=${e.message}",
                     e
                 )
 
                 Toast.makeText(
                     this,
-                    "Legacy Google error: statusCode=\${e.statusCode}\n\${e.message}",
+                    "Legacy Google error: statusCode=${e.statusCode}\n${e.message}",
                     Toast.LENGTH_LONG
                 ).show()
             }
