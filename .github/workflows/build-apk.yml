@@ -58,7 +58,18 @@ jobs:
           echo "========================================"
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        run: |
+          for attempt in 1 2 3; do
+            echo "Build debug APK attempt $attempt"
+            if gradle assembleDebug --no-daemon; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Dependency resolution/build failed; waiting 30 seconds before retry..."
+              sleep 30
+            fi
+          done
+          exit 1
         env:
           KEYSTORE_PATH: frianzo-release.keystore
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
