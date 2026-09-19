@@ -166,44 +166,43 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun getGoogleCredential(serverClientId: String): GoogleCredentialResult {
-        // Request all Google accounts first. This is the documented fallback for
-        // devices where no previously authorized credential exists (for example
-        // after an uninstall/reinstall).
+        // The website's Google button can reach accounts that require reauthentication.
+        // Android's documented Sign in with Google button flow is intended for that case.
         val nonce = generateSecureRandomNonce()
-        val googleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(false)
-            .setServerClientId(serverClientId)
+        val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId)
             .setNonce(nonce)
             .build()
 
         val request = GetCredentialRequest.Builder()
-            .addCredentialOption(googleIdOption)
+            .addCredentialOption(signInWithGoogleOption)
             .build()
 
-        Log.i(TAG, "Requesting Google ID credential with all accounts enabled")
+        Log.i(TAG, "Requesting Google Sign in button flow")
         return try {
             val response = credentialManager.getCredential(
                 request = request,
                 context = MutableContextWrapper(this@MainActivity)
             )
-            Log.i(TAG, "Google ID credential flow succeeded")
+            Log.i(TAG, "Google Sign in button flow succeeded")
             GoogleCredentialResult(response, nonce)
         } catch (e: GetCredentialException) {
-            Log.w(TAG, "Google ID credential flow failed; trying Sign in with Google button flow", e)
+            Log.w(TAG, "Google Sign in button flow failed; trying all-accounts Google ID flow", e)
 
             val fallbackNonce = generateSecureRandomNonce()
-            val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId)
+            val googleIdOption = GetGoogleIdOption.Builder()
+                .setFilterByAuthorizedAccounts(false)
+                .setServerClientId(serverClientId)
                 .setNonce(fallbackNonce)
                 .build()
             val fallbackRequest = GetCredentialRequest.Builder()
-                .addCredentialOption(signInWithGoogleOption)
+                .addCredentialOption(googleIdOption)
                 .build()
 
             val response = credentialManager.getCredential(
                 request = fallbackRequest,
                 context = MutableContextWrapper(this@MainActivity)
             )
-            Log.i(TAG, "Sign in with Google fallback succeeded")
+            Log.i(TAG, "All-accounts Google ID fallback succeeded")
             GoogleCredentialResult(response, fallbackNonce)
         }
     }
