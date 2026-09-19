@@ -201,7 +201,7 @@ class MainActivity : AppCompatActivity() {
 
             val response = credentialManager.getCredential(
                 request = fallbackRequest,
-                context = this@MainActivity
+                context = MutableContextWrapper(this@MainActivity)
             )
             Log.i(TAG, "Sign in with Google fallback succeeded")
             GoogleCredentialResult(response, fallbackNonce)
