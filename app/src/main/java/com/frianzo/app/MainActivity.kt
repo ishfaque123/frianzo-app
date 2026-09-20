@@ -78,16 +78,30 @@ class MainActivity : AppCompatActivity() {
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                updateSwipeRefreshForUrl(request.url)
                 return handleUrl(request.url)
             }
 
             @Deprecated("Deprecated in API 24")
             override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-                return handleUrl(Uri.parse(url))
+                val uri = Uri.parse(url)
+                updateSwipeRefreshForUrl(uri)
+                return handleUrl(uri)
+            }
+
+            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                super.doUpdateVisitedHistory(view, url, isReload)
+                if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
+            }
+
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
+                if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
             }
         }
@@ -111,6 +125,21 @@ class MainActivity : AppCompatActivity() {
         if (oauthUri != null && isOAuthCallback(oauthUri)) {
             handleOAuthCallback(oauthUri)
         }
+    }
+
+    private fun updateSwipeRefreshForUrl(uri: Uri) {
+        val isFrianzoHost = uri.scheme.equals("https", ignoreCase = true) &&
+            (uri.host.equals(SITE_HOST, ignoreCase = true) ||
+                uri.host.equals("www.$SITE_HOST", ignoreCase = true))
+        val isReelsSection = isFrianzoHost &&
+            (uri.path == "/reels" || uri.path?.startsWith("/reels/") == true)
+
+        // Reel feed uses vertical swipe navigation. Disable pull-to-refresh only
+        // while the WebView is inside the reels section so a downward reel swipe
+        // can never trigger SwipeRefreshLayout.reload(). Other app pages keep
+        // their existing pull-to-refresh behavior.
+        swipeRefresh.isEnabled = !isReelsSection
+        if (isReelsSection) swipeRefresh.isRefreshing = false
     }
 
     private fun handleUrl(uri: Uri): Boolean {
