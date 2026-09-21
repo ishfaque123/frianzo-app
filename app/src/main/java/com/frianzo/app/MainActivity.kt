@@ -59,10 +59,47 @@ class MainActivity : AppCompatActivity() {
         fun getPushToken(): String = pushToken
     }
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingFileChooserIntent: Intent? = null
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
         fileChooserCallback?.onReceiveValue(uris)
         fileChooserCallback = null
+    }
+
+    private fun mediaPermissions(): Array<String> {
+        val permissions = mutableListOf(Manifest.permission.CAMERA)
+
+        when {
+            Build.VERSION.SDK_INT >= 34 -> {
+                permissions += Manifest.permission.READ_MEDIA_IMAGES
+                permissions += Manifest.permission.READ_MEDIA_VIDEO
+                permissions += Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            }
+            Build.VERSION.SDK_INT >= 33 -> {
+                permissions += Manifest.permission.READ_MEDIA_IMAGES
+                permissions += Manifest.permission.READ_MEDIA_VIDEO
+            }
+            else -> {
+                permissions += Manifest.permission.READ_EXTERNAL_STORAGE
+            }
+        }
+
+        return permissions.toTypedArray()
+    }
+
+    private fun hasMediaPermissions(): Boolean =
+        mediaPermissions().all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+
+    private fun requestMediaPermissionsAndOpenPicker(intent: Intent) {
+        if (hasMediaPermissions()) {
+            fileChooserLauncher.launch(intent)
+            return
+        }
+
+        pendingFileChooserIntent = intent
+        mediaPermissionLauncher.launch(mediaPermissions())
     }
 
     companion object {
@@ -112,8 +149,9 @@ class MainActivity : AppCompatActivity() {
                 if (filePathCallback == null || fileChooserParams == null) return false
                 fileChooserCallback?.onReceiveValue(null)
                 fileChooserCallback = filePathCallback
+
                 return try {
-                    fileChooserLauncher.launch(fileChooserParams.createIntent())
+                    requestMediaPermissionsAndOpenPicker(fileChooserParams.createIntent())
                     true
                 } catch (e: ActivityNotFoundException) {
                     fileChooserCallback = null
