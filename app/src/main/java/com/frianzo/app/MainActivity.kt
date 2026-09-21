@@ -1,11 +1,6 @@
 package com.frianzo.app
 
-import android.Manifest
 import android.annotation.SuppressLint
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.content.pm.PackageManager
-import android.os.Build
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -17,7 +12,6 @@ import android.util.Log
 import android.widget.Toast
 import android.view.KeyEvent
 import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,7 +19,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -33,7 +26,6 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
-import com.google.firebase.messaging.FirebaseMessaging
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -50,80 +42,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var credentialManager: CredentialManager
-    @Volatile private var pushToken: String = ""
-    private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
-
-    private val mediaPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            val allGranted = permissions.values.all { it }
-            val intent = pendingFileChooserIntent
-            pendingFileChooserIntent = null
-
-            if (allGranted && intent != null) {
-                try {
-                    fileChooserLauncher.launch(intent)
-                } catch (e: ActivityNotFoundException) {
-                    fileChooserCallback?.onReceiveValue(null)
-                    fileChooserCallback = null
-                }
-            } else {
-                fileChooserCallback?.onReceiveValue(null)
-                fileChooserCallback = null
-                Toast.makeText(
-                    this@MainActivity,
-                    "Photo/video permission is required to select media.",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-
-    inner class NativeBridge {
-        @JavascriptInterface
-        fun getPushToken(): String = pushToken
-    }
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
-    private var pendingFileChooserIntent: Intent? = null
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
         fileChooserCallback?.onReceiveValue(uris)
         fileChooserCallback = null
-    }
-
-    private fun mediaPermissions(): Array<String> {
-        val permissions = mutableListOf(Manifest.permission.CAMERA)
-
-        when {
-            Build.VERSION.SDK_INT >= 34 -> {
-                permissions += Manifest.permission.READ_MEDIA_IMAGES
-                permissions += Manifest.permission.READ_MEDIA_VIDEO
-                permissions += Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-            }
-            Build.VERSION.SDK_INT >= 33 -> {
-                permissions += Manifest.permission.READ_MEDIA_IMAGES
-                permissions += Manifest.permission.READ_MEDIA_VIDEO
-            }
-            else -> {
-                permissions += Manifest.permission.READ_EXTERNAL_STORAGE
-            }
-        }
-
-        return permissions.toTypedArray()
-    }
-
-    private fun hasMediaPermissions(): Boolean =
-        mediaPermissions().all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-
-    private fun requestMediaPermissionsAndOpenPicker(intent: Intent) {
-        if (hasMediaPermissions()) {
-            fileChooserLauncher.launch(intent)
-            return
-        }
-
-        pendingFileChooserIntent = intent
-        mediaPermissionLauncher.launch(mediaPermissions())
     }
 
     companion object {
@@ -148,8 +71,6 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webview)
         swipeRefresh = findViewById(R.id.swipe_refresh)
         credentialManager = CredentialManager.create(this)
-        webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
-        setupPush()
 
         webView.settings.apply {
             javaScriptEnabled = true
@@ -173,9 +94,8 @@ class MainActivity : AppCompatActivity() {
                 if (filePathCallback == null || fileChooserParams == null) return false
                 fileChooserCallback?.onReceiveValue(null)
                 fileChooserCallback = filePathCallback
-
                 return try {
-                    requestMediaPermissionsAndOpenPicker(fileChooserParams.createIntent())
+                    fileChooserLauncher.launch(fileChooserParams.createIntent())
                     true
                 } catch (e: ActivityNotFoundException) {
                     fileChooserCallback = null
@@ -222,50 +142,14 @@ class MainActivity : AppCompatActivity() {
             if (oauthUri != null && isOAuthCallback(oauthUri)) {
                 webView.post { handleOAuthCallback(oauthUri) }
             } else {
-                webView.loadUrl(notificationTargetUrl(intent) ?: SITE_URL)
+                webView.loadUrl(SITE_URL)
             }
         }
-    }
-
-    private fun setupPush() {
-        createNotificationChannel()
-        requestNotificationPermissionIfNeeded()
-        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-            if (!task.isSuccessful) {
-                Log.w("FrianzoPush", "FCM token fetch failed", task.exception)
-                return@addOnCompleteListener
-            }
-            pushToken = task.result ?: ""
-            webView.post {
-                webView.evaluateJavascript("window.dispatchEvent(new Event('frianzo-push-token'))", null)
-            }
-        }
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel("frianzo_default", "Notifications", NotificationManager.IMPORTANCE_HIGH)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        }
-    }
-
-    private fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
-
-    private fun notificationTargetUrl(intent: Intent?): String? {
-        val path = intent?.getStringExtra("url") ?: return null
-        return if (path.startsWith("/") && !path.startsWith("//")) "$SITE_URL$path" else null
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
-        notificationTargetUrl(intent)?.let { webView.loadUrl(it) }
         val oauthUri = intent?.data
         if (oauthUri != null && isOAuthCallback(oauthUri)) {
             handleOAuthCallback(oauthUri)
