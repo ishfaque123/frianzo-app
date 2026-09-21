@@ -1,6 +1,11 @@
 package com.frianzo.app
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.PackageManager
+import android.os.Build
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -12,6 +17,7 @@ import android.util.Log
 import android.widget.Toast
 import android.view.KeyEvent
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,6 +25,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -26,6 +33,7 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.firebase.messaging.FirebaseMessaging
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -42,6 +50,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var credentialManager: CredentialManager
+    @Volatile private var pushToken: String = ""
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    inner class NativeBridge {
+        @JavascriptInterface
+        fun getPushToken(): String = pushToken
+    }
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
@@ -71,6 +87,8 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webview)
         swipeRefresh = findViewById(R.id.swipe_refresh)
         credentialManager = CredentialManager.create(this)
+        webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
+        setupPush()
 
         webView.settings.apply {
             javaScriptEnabled = true
@@ -142,14 +160,50 @@ class MainActivity : AppCompatActivity() {
             if (oauthUri != null && isOAuthCallback(oauthUri)) {
                 webView.post { handleOAuthCallback(oauthUri) }
             } else {
-                webView.loadUrl(SITE_URL)
+                webView.loadUrl(notificationTargetUrl(intent) ?: SITE_URL)
             }
         }
+    }
+
+    private fun setupPush() {
+        createNotificationChannel()
+        requestNotificationPermissionIfNeeded()
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (!task.isSuccessful) {
+                Log.w("FrianzoPush", "FCM token fetch failed", task.exception)
+                return@addOnCompleteListener
+            }
+            pushToken = task.result ?: ""
+            webView.post {
+                webView.evaluateJavascript("window.dispatchEvent(new Event('frianzo-push-token'))", null)
+            }
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel("frianzo_default", "Notifications", NotificationManager.IMPORTANCE_HIGH)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun notificationTargetUrl(intent: Intent?): String? {
+        val path = intent?.getStringExtra("url") ?: return null
+        return if (path.startsWith("/") && !path.startsWith("//")) "$SITE_URL$path" else null
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
+        notificationTargetUrl(intent)?.let { webView.loadUrl(it) }
         val oauthUri = intent?.data
         if (oauthUri != null && isOAuthCallback(oauthUri)) {
             handleOAuthCallback(oauthUri)
