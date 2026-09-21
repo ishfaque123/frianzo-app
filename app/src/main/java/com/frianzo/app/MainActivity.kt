@@ -54,6 +54,30 @@ class MainActivity : AppCompatActivity() {
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
+    private val mediaPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            val allGranted = permissions.values.all { it }
+            val intent = pendingFileChooserIntent
+            pendingFileChooserIntent = null
+
+            if (allGranted && intent != null) {
+                try {
+                    fileChooserLauncher.launch(intent)
+                } catch (e: ActivityNotFoundException) {
+                    fileChooserCallback?.onReceiveValue(null)
+                    fileChooserCallback = null
+                }
+            } else {
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = null
+                Toast.makeText(
+                    this@MainActivity,
+                    "Photo/video permission is required to select media.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+
     inner class NativeBridge {
         @JavascriptInterface
         fun getPushToken(): String = pushToken
