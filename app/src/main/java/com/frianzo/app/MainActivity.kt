@@ -153,6 +153,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // The web page's own header (Frianzo logo bar) and 4-icon nav
+        // bar sit inside the WebView's HTML, so the native pull-to-refresh
+        // spinner doesn't know about them by default and starts at the very
+        // top of the screen. Push it down below that chrome, like Facebook.
+        run {
+            val density = resources.displayMetrics.density
+            val chromeHeightDp = 120 // approx height of the header + 4-icon nav bar
+            val startOffsetPx = (chromeHeightDp * density).toInt()
+            val endOffsetPx = ((chromeHeightDp + 64) * density).toInt()
+            swipeRefresh.setProgressViewOffset(false, startOffsetPx, endOffsetPx)
+        }
+
         swipeRefresh.setOnRefreshListener { webView.reload() }
 
         if (savedInstanceState == null) {
