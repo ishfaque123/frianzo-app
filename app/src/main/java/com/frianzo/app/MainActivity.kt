@@ -454,8 +454,10 @@ class MainActivity : AppCompatActivity() {
 
         val opts = "Path=/; Secure; SameSite=None; Domain=.frianzo.online"
 
+        cookieManager.setCookie(API_URL, "vynzo_auth_token=$token; $opts")
         cookieManager.setCookie(API_URL, "vynzo_token=$token; $opts")
         cookieManager.setCookie(API_URL, "vynzo_device=$deviceToken; $opts")
+        cookieManager.setCookie(SITE_URL, "vynzo_auth_token=$token; $opts")
         cookieManager.setCookie(SITE_URL, "vynzo_token=$token; $opts")
         cookieManager.setCookie(SITE_URL, "vynzo_device=$deviceToken; $opts")
         cookieManager.flush()
