@@ -10,7 +10,7 @@ android {
 
     defaultConfig {
         applicationId = "com.frianzo.app"
-        minSdk = 24
+        minSdk = 23
         targetSdk = 36
         versionCode = 4
         versionName = "4"
