@@ -1,68 +1,26 @@
 {
   "project_info": {
-    "project_number": "342938567781",
-    "project_id": "frianzo",
-    "storage_bucket": "frianzo.firebasestorage.app"
+    "project_number": "1042747770370",
+    "project_id": "frianzo-2edf9",
+    "storage_bucket": "frianzo-2edf9.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:342938567781:android:f00db6e799b5bcb2cd728c",
+        "mobilesdk_app_id": "1:1042747770370:android:7ff9ec5149a1fbd802091b",
         "android_client_info": {
           "package_name": "com.frianzo.app"
         }
       },
-      "oauth_client": [
-        {
-          "client_id": "342938567781-7d0e8ntgm88l53srejv3rno0uq3n0vm2.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.frianzo.app",
-            "certificate_hash": "33679a1356dbfc6d4ce14813ea6aae756efeb8e6"
-          }
-        },
-        {
-          "client_id": "342938567781-ja18sg1hsnj2hrj107lfvl1eupq32q9n.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.frianzo.app",
-            "certificate_hash": "d5e647c4cbe74327d02b34d7f853f90528a3bb3b"
-          }
-        },
-        {
-          "client_id": "342938567781-m8g8urith96ttov90ov2mf2m76qagmv5.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.frianzo.app",
-            "certificate_hash": "7c98aeabb8580a901e3511b7b9809fdf97a31dd8"
-          }
-        },
-        {
-          "client_id": "342938567781-qcr0r9h51n9p0gj0b084t7vic121iug4.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.frianzo.app",
-            "certificate_hash": "cb9937d12699c6f5eb153852c9d82a2a71f0b7a8"
-          }
-        },
-        {
-          "client_id": "342938567781-d7sq82aaj01gdmu0uhg9gl9f77aeei89.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
+      "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDj-M9eV9_dbH1FQqsVMd3uy66B5HPN2b0"
+          "current_key": "AIzaSyCIa6ctXACwt3_zIJUHYr6kQQgPcj4h4zo"
         }
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "342938567781-d7sq82aaj01gdmu0uhg9gl9f77aeei89.apps.googleusercontent.com",
-              "client_type": 3
-            }
-          ]
+          "other_platform_oauth_client": []
         }
       }
     }
