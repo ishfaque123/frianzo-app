@@ -322,12 +322,22 @@ class MainActivity : AppCompatActivity() {
                 .addCredentialOption(googleIdOption)
                 .build()
 
-            val response = credentialManager.getCredential(
-                request = fallbackRequest,
-                context = MutableContextWrapper(this@MainActivity)
-            )
-            Log.i(TAG, "All-accounts Google ID fallback succeeded")
-            GoogleCredentialResult(response, fallbackNonce)
+            try {
+                val response = credentialManager.getCredential(
+                    request = fallbackRequest,
+                    context = MutableContextWrapper(this@MainActivity)
+                )
+                Log.i(TAG, "All-accounts Google ID fallback succeeded")
+                GoogleCredentialResult(response, fallbackNonce)
+            } catch (fallbackError: GetCredentialException) {
+                Log.e(TAG, "Google ID fallback failed: " + fallbackError::class.java.name + ": " + fallbackError.message, fallbackError)
+                throw IllegalStateException(
+                    "Google Credential Manager failed in both flows. Primary: " +
+                        e::class.java.simpleName + ": " + e.message +
+                        "; Fallback: " + fallbackError::class.java.simpleName + ": " + fallbackError.message,
+                    fallbackError
+                )
+            }
         }
     }
 
