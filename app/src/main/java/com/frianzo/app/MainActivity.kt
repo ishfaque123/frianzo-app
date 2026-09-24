@@ -384,13 +384,30 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "Step 5: Cookies set, navigating to $destination")
             } catch (e: Exception) {
                 val cause = generateDiagnosticMessage(e)
-                Log.e(TAG, "Native Google sign-in failed: $cause", e)
-                Toast.makeText(this@MainActivity, cause, Toast.LENGTH_LONG).show()
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Google Login Failed")
-                    .setMessage(cause)
-                    .setPositiveButton("OK", null)
-                    .show()
+                Log.e(TAG, "Native Google sign-in failed; opening secure web OAuth fallback: $cause", e)
+
+                // Credential Manager can fail before any backend request (for example
+                // when the device's Google credential provider cannot complete account
+                // re-authentication). The backend already supports a mobile OAuth flow:
+                // /api/auth/google/start?app=1 -> Google -> frianzo://oauth/callback.
+                // Use that existing flow instead of trapping the user on an error dialog.
+                try {
+                    val fallbackUri = Uri.parse("$API_URL$GOOGLE_START_PATH?app=1")
+                    Log.i(TAG, "Launching web OAuth fallback: $fallbackUri")
+                    startActivity(Intent(Intent.ACTION_VIEW, fallbackUri))
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Google login browser mein open ho raha hai...",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } catch (fallbackError: Exception) {
+                    Log.e(TAG, "Web OAuth fallback could not be launched", fallbackError)
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Google Login Failed")
+                        .setMessage(cause)
+                        .setPositiveButton("OK", null)
+                        .show()
+                }
             }
         }
     }
