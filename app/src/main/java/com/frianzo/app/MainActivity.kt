@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -34,6 +35,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.firebase.messaging.FirebaseMessaging
+import com.android.installreferrer.api.InstallReferrerClient
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -44,6 +46,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.SecureRandom
+import java.security.MessageDigest
+import java.nio.charset.StandardCharsets
 
 class MainActivity : AppCompatActivity() {
 
@@ -51,12 +55,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var credentialManager: CredentialManager
     @Volatile private var pushToken: String = ""
+    @Volatile private var installReferrer: String? = null
+    @Volatile private var referralClaimed: Boolean = false
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     inner class NativeBridge {
         @JavascriptInterface
         fun getPushToken(): String = pushToken
+
+        @JavascriptInterface
+        fun getInstallReferrer(): String = installReferrer ?: ""
     }
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -88,6 +97,7 @@ class MainActivity : AppCompatActivity() {
         swipeRefresh = findViewById(R.id.swipe_refresh)
         credentialManager = CredentialManager.create(this)
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
+        loadInstallReferrer()
         setupPush()
 
         webView.settings.apply {
@@ -150,6 +160,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
+                tryClaimReferral()
             }
         }
 
@@ -174,6 +185,105 @@ class MainActivity : AppCompatActivity() {
             } else {
                 webView.loadUrl(notificationTargetUrl(intent) ?: SITE_URL)
             }
+        }
+    }
+
+    private fun loadInstallReferrer() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val client = InstallReferrerClient.newBuilder(this@MainActivity).build()
+            try {
+                client.startConnection(object : InstallReferrerClient.InstallReferrerStateListener {
+                    override fun onInstallReferrerSetupFinished(responseCode: Int) {
+                        if (responseCode == InstallReferrerClient.InstallReferrerResponse.OK) {
+                            try {
+                                installReferrer = client.installReferrer.installReferrer
+                                Log.i(TAG, "Play Install Referrer loaded")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Could not read Play Install Referrer", e)
+                            }
+                        } else {
+                            Log.i(TAG, "Play Install Referrer unavailable: $responseCode")
+                        }
+                        client.endConnection()
+                    }
+
+                    override fun onInstallReferrerServiceDisconnected() {
+                        Log.i(TAG, "Play Install Referrer service disconnected")
+                    }
+                })
+            } catch (e: Exception) {
+                Log.w(TAG, "Play Install Referrer setup failed", e)
+                try { client.endConnection() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    private fun getReferralDeviceFingerprint(): String {
+        val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
+        val input = "com.frianzo.app:$androidId"
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray(StandardCharsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun tryClaimReferral() {
+        if (referralClaimed) return
+        val referrer = installReferrer?.trim().orEmpty()
+        if (referrer.isEmpty()) return
+
+        lifecycleScope.launch {
+            try {
+                val authToken = getCookieValue("vynzo_auth_token") ?: getCookieValue("vynzo_token")
+                if (authToken.isNullOrEmpty()) return@launch
+                val accepted = withContext(Dispatchers.IO) {
+                    claimReferralOnBackend(authToken, referrer, getReferralDeviceFingerprint())
+                }
+                if (accepted) {
+                    referralClaimed = true
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Referral claim failed; will retry on next page", e)
+            }
+        }
+    }
+
+    private fun claimReferralOnBackend(authToken: String, referrer: String, deviceFingerprint: String): Boolean {
+        val connection = (URL("$API_URL/api/users/me/referral/claim").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = HTTP_TIMEOUT_MS
+            readTimeout = HTTP_TIMEOUT_MS
+            doOutput = true
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("Cookie", "vynzo_auth_token=$authToken")
+            setRequestProperty("Origin", SITE_URL)
+        }
+
+        val body = JSONObject().apply {
+            put("installReferrer", referrer)
+            put("deviceFingerprint", deviceFingerprint)
+        }.toString()
+
+        return try {
+            connection.outputStream.bufferedWriter().use { it.write(body) }
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (responseCode !in 200..299) {
+                Log.w(TAG, "Referral claim HTTP $responseCode: $response")
+                return false
+            }
+            val data = JSONObject(response).optJSONObject("data") ?: return false
+            val accepted = data.optBoolean("accepted", false)
+            if (!accepted) {
+                val reason = data.optString("reason")
+                if (reason == "ACCOUNT_ALREADY_REFERRED" || reason == "DEVICE_ALREADY_REFERRED" || reason == "REFERRAL_ALREADY_CLAIMED") {
+                    referralClaimed = true
+                }
+            }
+            accepted || referralClaimed
+        } finally {
+            connection.disconnect()
         }
     }
 
