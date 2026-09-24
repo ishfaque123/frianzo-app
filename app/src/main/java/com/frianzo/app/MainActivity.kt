@@ -36,6 +36,7 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.firebase.messaging.FirebaseMessaging
 import com.android.installreferrer.api.InstallReferrerClient
+import com.android.installreferrer.api.InstallReferrerStateListener
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -192,7 +193,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val client = InstallReferrerClient.newBuilder(this@MainActivity).build()
             try {
-                client.startConnection(object : InstallReferrerClient.InstallReferrerStateListener {
+                client.startConnection(object : InstallReferrerStateListener {
                     override fun onInstallReferrerSetupFinished(responseCode: Int) {
                         if (responseCode == InstallReferrerClient.InstallReferrerResponse.OK) {
                             try {
