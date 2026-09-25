@@ -28,6 +28,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.PermissionRequest
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
@@ -63,6 +64,17 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var referralClaimed: Boolean = false
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private var pendingWebAudioPermissionRequest: PermissionRequest? = null
+    private val microphonePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val request = pendingWebAudioPermissionRequest
+            pendingWebAudioPermissionRequest = null
+            if (granted && request != null) {
+                request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+            } else {
+                request?.deny()
+            }
+        }
 
     inner class NativeBridge {
         @JavascriptInterface
@@ -130,6 +142,29 @@ class MainActivity : AppCompatActivity() {
         cookieManager.setAcceptThirdPartyCookies(webView, true)
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest) {
+                runOnUiThread {
+                    val wantsAudio = request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
+                    if (!wantsAudio) {
+                        request.deny()
+                        return@runOnUiThread
+                    }
+
+                    if (ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                        return@runOnUiThread
+                    }
+
+                    pendingWebAudioPermissionRequest?.deny()
+                    pendingWebAudioPermissionRequest = request
+                    microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
+
             override fun onShowFileChooser(
                 view: WebView?,
                 filePathCallback: ValueCallback<Array<Uri>>?,
