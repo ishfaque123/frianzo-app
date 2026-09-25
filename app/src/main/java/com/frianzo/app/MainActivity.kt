@@ -11,6 +11,9 @@ import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.MutableContextWrapper
+import android.provider.MediaStore
+import androidx.core.content.FileProvider
+import java.io.File
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -69,9 +72,21 @@ class MainActivity : AppCompatActivity() {
         fun getInstallReferrer(): String = installReferrer ?: ""
     }
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var cameraCaptureUri: Uri? = null
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
-        fileChooserCallback?.onReceiveValue(uris)
+        val capturedUri = cameraCaptureUri
+        cameraCaptureUri = null
+        if (capturedUri != null) {
+            // We launched a direct camera-capture intent (not the standard
+            // document/gallery chooser), so the result doesn't come back in
+            // the format FileChooserParams.parseResult() expects. The file
+            // was written straight to the Uri we handed the camera app.
+            val uris = if (result.resultCode == RESULT_OK) arrayOf(capturedUri) else null
+            fileChooserCallback?.onReceiveValue(uris)
+        } else {
+            val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            fileChooserCallback?.onReceiveValue(uris)
+        }
         fileChooserCallback = null
     }
 
@@ -123,6 +138,32 @@ class MainActivity : AppCompatActivity() {
                 if (filePathCallback == null || fileChooserParams == null) return false
                 fileChooserCallback?.onReceiveValue(null)
                 fileChooserCallback = filePathCallback
+
+                // When the web page's <input capture> attribute asks for a direct
+                // camera capture (our "Camera" button), launch the camera app
+                // itself instead of the normal file/gallery picker.
+                val acceptTypes = fileChooserParams.acceptTypes
+                val wantsVideo = acceptTypes.any { it.startsWith("video/") }
+                val wantsImage = acceptTypes.any { it.startsWith("image/") }
+                if (fileChooserParams.isCaptureEnabled && (wantsVideo || wantsImage)) {
+                    try {
+                        val extension = if (wantsVideo) "mp4" else "jpg"
+                        val file = File.createTempFile("capture_", ".$extension", cacheDir)
+                        val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", file)
+                        val captureAction = if (wantsVideo) MediaStore.ACTION_VIDEO_CAPTURE else MediaStore.ACTION_IMAGE_CAPTURE
+                        val captureIntent = Intent(captureAction).apply {
+                            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        }
+                        cameraCaptureUri = uri
+                        fileChooserLauncher.launch(captureIntent)
+                        return true
+                    } catch (e: Exception) {
+                        cameraCaptureUri = null
+                        Log.w(TAG, "Direct camera capture failed, falling back to chooser", e)
+                    }
+                }
+
                 return try {
                     fileChooserLauncher.launch(fileChooserParams.createIntent())
                     true
