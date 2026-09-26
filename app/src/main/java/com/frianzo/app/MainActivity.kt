@@ -29,6 +29,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.PermissionRequest
+import android.webkit.GeolocationPermissions
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
@@ -74,6 +75,13 @@ class MainActivity : AppCompatActivity() {
             } else {
                 request?.deny()
             }
+        }
+    private var pendingGeolocationRequest: Pair<String, GeolocationPermissions.Callback>? = null
+    private val locationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val request = pendingGeolocationRequest
+            pendingGeolocationRequest = null
+            request?.second?.invoke(request.first, granted, false)
         }
 
     inner class NativeBridge {
@@ -135,6 +143,7 @@ class MainActivity : AppCompatActivity() {
             useWideViewPort = true
             setSupportZoom(false)
             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            geolocationEnabled = true
         }
 
         val cookieManager = CookieManager.getInstance()
@@ -163,6 +172,25 @@ class MainActivity : AppCompatActivity() {
                     pendingWebAudioPermissionRequest = request
                     microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
+            }
+
+            override fun onGeolocationPermissionsShowPrompt(
+                origin: String,
+                callback: GeolocationPermissions.Callback
+            ) {
+                val hasFine = ContextCompat.checkSelfPermission(
+                    this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+                val hasCoarse = ContextCompat.checkSelfPermission(
+                    this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+                if (hasFine || hasCoarse) {
+                    callback.invoke(origin, true, false)
+                    return
+                }
+                pendingGeolocationRequest?.second?.invoke(pendingGeolocationRequest?.first ?: origin, false, false)
+                pendingGeolocationRequest = origin to callback
+                locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             }
 
             override fun onShowFileChooser(
