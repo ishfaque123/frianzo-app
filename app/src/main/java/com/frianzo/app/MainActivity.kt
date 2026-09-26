@@ -143,8 +143,8 @@ class MainActivity : AppCompatActivity() {
             useWideViewPort = true
             setSupportZoom(false)
             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
-            geolocationEnabled = true
         }
+        webView.settings.setGeolocationEnabled(true)
 
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
