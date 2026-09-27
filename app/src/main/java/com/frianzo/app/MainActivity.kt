@@ -90,6 +90,16 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun getInstallReferrer(): String = installReferrer ?: ""
+
+        // Called right after logout clears the auth cookies via JS. WebView
+        // normally persists cookies to disk on its own schedule, so if the
+        // app is force-closed right after logging out, the deletion can be
+        // lost and the old session cookie comes back on next launch. This
+        // forces the cleared cookie state to disk immediately.
+        @JavascriptInterface
+        fun flushCookies() {
+            CookieManager.getInstance().flush()
+        }
     }
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var cameraCaptureUri: Uri? = null
