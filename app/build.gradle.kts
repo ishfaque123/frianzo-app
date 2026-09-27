@@ -12,8 +12,8 @@ android {
         applicationId = "com.frianzo.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 12
-        versionName = "12"
+        versionCode = 11
+        versionName = "11"
     }
 
     signingConfigs {
@@ -59,7 +59,6 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
