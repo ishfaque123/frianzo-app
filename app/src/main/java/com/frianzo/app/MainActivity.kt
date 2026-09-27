@@ -32,6 +32,7 @@ import android.webkit.PermissionRequest
 import android.webkit.GeolocationPermissions
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -136,6 +137,7 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
@@ -295,11 +297,19 @@ class MainActivity : AppCompatActivity() {
         swipeRefresh.setOnRefreshListener { webView.reload() }
 
         if (savedInstanceState == null) {
-            val oauthUri = intent?.data
-            if (oauthUri != null && isOAuthCallback(oauthUri)) {
-                webView.post { handleOAuthCallback(oauthUri) }
+            val startUri = intent?.data
+            if (startUri != null && isOAuthCallback(startUri)) {
+                webView.post { handleOAuthCallback(startUri) }
             } else {
-                webView.loadUrl(notificationTargetUrl(intent) ?: SITE_URL)
+                // A launcher shortcut (New Post / Messages / Reels) sends a
+                // plain https://frianzo.online/... link via intent.data. Honor
+                // it directly so the shortcut actually opens that section
+                // instead of always falling back to the homepage.
+                val shortcutUrl = startUri?.takeIf {
+                    it.scheme.equals("https", ignoreCase = true) &&
+                        (it.host.equals(SITE_HOST, ignoreCase = true) || it.host.equals("www.$SITE_HOST", ignoreCase = true))
+                }?.toString()
+                webView.loadUrl(shortcutUrl ?: notificationTargetUrl(intent) ?: SITE_URL)
             }
         }
     }
@@ -442,9 +452,16 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         notificationTargetUrl(intent)?.let { webView.loadUrl(it) }
-        val oauthUri = intent?.data
-        if (oauthUri != null && isOAuthCallback(oauthUri)) {
-            handleOAuthCallback(oauthUri)
+        val dataUri = intent?.data
+        if (dataUri != null) {
+            if (isOAuthCallback(dataUri)) {
+                handleOAuthCallback(dataUri)
+            } else if (dataUri.scheme.equals("https", ignoreCase = true) &&
+                (dataUri.host.equals(SITE_HOST, ignoreCase = true) || dataUri.host.equals("www.$SITE_HOST", ignoreCase = true))
+            ) {
+                // Shortcut tapped while the app was already open.
+                webView.loadUrl(dataUri.toString())
+            }
         }
     }
 

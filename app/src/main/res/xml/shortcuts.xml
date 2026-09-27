@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_post"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_new_post"
+        android:shortcutShortLabel="@string/shortcut_new_post_short"
+        android:shortcutLongLabel="@string/shortcut_new_post_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.frianzo.app"
+            android:targetClass="com.frianzo.app.MainActivity"
+            android:data="https://frianzo.online/compose" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="messages"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_messages"
+        android:shortcutShortLabel="@string/shortcut_messages_short"
+        android:shortcutLongLabel="@string/shortcut_messages_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.frianzo.app"
+            android:targetClass="com.frianzo.app.MainActivity"
+            android:data="https://frianzo.online/messages" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="reels"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_reels"
+        android:shortcutShortLabel="@string/shortcut_reels_short"
+        android:shortcutLongLabel="@string/shortcut_reels_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.frianzo.app"
+            android:targetClass="com.frianzo.app.MainActivity"
+            android:data="https://frianzo.online/reels" />
+    </shortcut>
+</shortcuts>
