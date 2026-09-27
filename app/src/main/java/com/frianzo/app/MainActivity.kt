@@ -140,6 +140,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         webView = findViewById(R.id.webview)
+        webView.setBackgroundColor(ContextCompat.getColor(this, R.color.frianzo_navy))
         swipeRefresh = findViewById(R.id.swipe_refresh)
         credentialManager = CredentialManager.create(this)
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
