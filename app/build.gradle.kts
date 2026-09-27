@@ -12,8 +12,8 @@ android {
         applicationId = "com.frianzo.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 11
-        versionName = "11"
+        versionCode = 12
+        versionName = "12"
     }
 
     signingConfigs {

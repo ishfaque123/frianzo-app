@@ -136,6 +136,7 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
+        setTheme(R.style.Theme_Frianzo)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
@@ -770,6 +771,18 @@ class MainActivity : AppCompatActivity() {
         val deviceToken: String,
         val isNewUser: Boolean
     )
+
+    override fun onResume() {
+        super.onResume()
+        webView.onResume()
+        webView.resumeTimers()
+    }
+
+    override fun onPause() {
+        webView.onPause()
+        webView.pauseTimers()
+        super.onPause()
+    }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {

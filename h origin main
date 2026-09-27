@@ -1,0 +1,21 @@
+[1mdiff --git a/app/src/main/java/com/frianzo/app/MainActivity.kt b/app/src/main/java/com/frianzo/app/MainActivity.kt[m
+[1mindex 5b21fa1..e9389cb 100644[m
+[1m--- a/app/src/main/java/com/frianzo/app/MainActivity.kt[m
+[1m+++ b/app/src/main/java/com/frianzo/app/MainActivity.kt[m
+[36m@@ -90,6 +90,16 @@[m [mclass MainActivity : AppCompatActivity() {[m
+ [m
+         @JavascriptInterface[m
+         fun getInstallReferrer(): String = installReferrer ?: ""[m
+[32m+[m
+[32m+[m[32m        // Called right after logout clears the auth cookies via JS. WebView[m
+[32m+[m[32m        // normally persists cookies to disk on its own schedule, so if the[m
+[32m+[m[32m        // app is force-closed right after logging out, the deletion can be[m
+[32m+[m[32m        // lost and the old session cookie comes back on next launch. This[m
+[32m+[m[32m        // forces the cleared cookie state to disk immediately.[m
+[32m+[m[32m        @JavascriptInterface[m
+[32m+[m[32m        fun flushCookies() {[m
+[32m+[m[32m            CookieManager.getInstance().flush()[m
+[32m+[m[32m        }[m
+     }[m
+     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null[m
+     private var cameraCaptureUri: Uri? = null[m
