@@ -4,6 +4,6 @@
         <item name="colorPrimaryDark">@color/frianzo_navy</item>
         <item name="colorAccent">@color/frianzo_gold</item>
         <item name="android:statusBarColor">@color/frianzo_navy</item>
-        <item name="android:windowBackground">@color/frianzo_navy</item>
+        <item name="android:windowBackground">@drawable/splash_background</item>
     </style>
 </resources>
