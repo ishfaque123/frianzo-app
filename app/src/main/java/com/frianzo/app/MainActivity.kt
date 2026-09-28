@@ -155,6 +155,10 @@ class MainActivity : AppCompatActivity() {
             useWideViewPort = true
             setSupportZoom(false)
             cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            // Reels start muted, then try to unmute on their own. By default
+            // WebView blocks sound for videos that weren't started by a tap,
+            // so some reels stayed muted. Allow autoplay with sound.
+            mediaPlaybackRequiresUserGesture = false
         }
         webView.settings.setGeolocationEnabled(true)
 
