@@ -4,8 +4,10 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.DownloadManager
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Environment
 import android.provider.Settings
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
@@ -251,6 +253,27 @@ class MainActivity : AppCompatActivity() {
                     filePathCallback.onReceiveValue(null)
                     false
                 }
+            }
+        }
+
+        webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+            try {
+                val request = DownloadManager.Request(Uri.parse(url)).apply {
+                    setMimeType(mimeType ?: "video/mp4")
+                    setTitle("Frianzo video")
+                    setDescription("Saving video from Frianzo")
+                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Frianzo-${System.currentTimeMillis()}.mp4")
+                    addRequestHeader("User-Agent", userAgent)
+                    setAllowedOverMetered(true)
+                    setAllowedOverRoaming(true)
+                }
+                val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                manager.enqueue(request)
+                Toast.makeText(this, "Video save started", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Log.e(TAG, "Video save failed", e)
+                Toast.makeText(this, "Unable to save video", Toast.LENGTH_SHORT).show()
             }
         }
 
