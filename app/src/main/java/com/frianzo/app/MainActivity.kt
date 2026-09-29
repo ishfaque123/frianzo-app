@@ -265,6 +265,9 @@ class MainActivity : AppCompatActivity() {
                     setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                     setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Frianzo-${System.currentTimeMillis()}.mp4")
                     addRequestHeader("User-Agent", userAgent)
+                    CookieManager.getInstance().getCookie(url)?.let { cookies ->
+                        if (cookies.isNotBlank()) addRequestHeader("Cookie", cookies)
+                    }
                     setAllowedOverMetered(true)
                     setAllowedOverRoaming(true)
                 }
