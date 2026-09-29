@@ -102,6 +102,11 @@ class MainActivity : AppCompatActivity() {
         fun flushCookies() {
             CookieManager.getInstance().flush()
         }
+
+        @JavascriptInterface
+        fun startReelDownload(url: String): Boolean {
+            return enqueueReelDownload(url)
+        }
     }
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var cameraCaptureUri: Uri? = null
@@ -256,15 +261,23 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-            try {
+        webView.setDownloadListener { url, userAgent, _, mimeType, _ ->
+            enqueueReelDownload(url, userAgent, mimeType)
+        }
+
+        private fun enqueueReelDownload(
+            url: String,
+            userAgent: String? = null,
+            mimeType: String? = null
+        ): Boolean {
+            return try {
                 val request = DownloadManager.Request(Uri.parse(url)).apply {
                     setMimeType(mimeType ?: "video/mp4")
                     setTitle("Frianzo video")
                     setDescription("Saving video from Frianzo")
                     setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Frianzo-${System.currentTimeMillis()}.mp4")
-                    addRequestHeader("User-Agent", userAgent)
+                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Frianzo-" + System.currentTimeMillis() + ".mp4")
+                    userAgent?.let { addRequestHeader("User-Agent", it) }
                     CookieManager.getInstance().getCookie(url)?.let { cookies ->
                         if (cookies.isNotBlank()) addRequestHeader("Cookie", cookies)
                     }
@@ -272,12 +285,44 @@ class MainActivity : AppCompatActivity() {
                     setAllowedOverRoaming(true)
                 }
                 val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-                manager.enqueue(request)
-                Toast.makeText(this, "Video save started", Toast.LENGTH_SHORT).show()
+                val downloadId = manager.enqueue(request)
+                Toast.makeText(this, "Download started", Toast.LENGTH_SHORT).show()
+                monitorReelDownload(downloadId)
+                true
             } catch (e: Exception) {
                 Log.e(TAG, "Video save failed", e)
                 Toast.makeText(this, "Unable to save video", Toast.LENGTH_SHORT).show()
+                false
             }
+        }
+
+        private fun monitorReelDownload(downloadId: Long) {
+            val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+            val handler = android.os.Handler(mainLooper)
+            val poller = object : Runnable {
+                override fun run() {
+                    val cursor = manager.query(DownloadManager.Query().setFilterById(downloadId))
+                    cursor.use {
+                        if (!it.moveToFirst()) { dispatchDownloadEvent(downloadId, "error", 0); return }
+                        val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                        val total = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                        val soFar = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                        val progress = if (total > 0) ((soFar * 100L) / total).toInt().coerceIn(0, 100) else 0
+                        when (status) {
+                            DownloadManager.STATUS_PENDING, DownloadManager.STATUS_RUNNING -> { dispatchDownloadEvent(downloadId, "progress", progress); handler.postDelayed(this, 300) }
+                            DownloadManager.STATUS_SUCCESSFUL -> dispatchDownloadEvent(downloadId, "complete", 100)
+                            DownloadManager.STATUS_FAILED -> dispatchDownloadEvent(downloadId, "error", progress)
+                            else -> handler.postDelayed(this, 500)
+                        }
+                    }
+                }
+            }
+            handler.post(poller)
+        }
+
+        private fun dispatchDownloadEvent(downloadId: Long, status: String, progress: Int) {
+            val script = "window.dispatchEvent(new CustomEvent('frianzo-download-progress',{detail:{id:" + downloadId + ",status:'" + status + "',progress:" + progress + "}}));"
+            webView.post { webView.evaluateJavascript(script, null) }
         }
 
         webView.webViewClient = object : WebViewClient() {
