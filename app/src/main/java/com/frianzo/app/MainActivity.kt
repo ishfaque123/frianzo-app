@@ -557,6 +557,14 @@ class MainActivity : AppCompatActivity() {
             return true
         }
 
+        // Keep reel downloads inside the Android app instead of opening Chrome.
+        if (scheme == "https" && host == API_HOST &&
+            path?.startsWith("/api/reels/") == true && path.endsWith("/download")) {
+            Log.i(TAG, "Intercepted reel download URL, starting native download")
+            enqueueReelDownload(uri.toString())
+            return true
+        }
+
         try {
             when (scheme) {
                 "http", "https" -> return openExternal(uri)
