@@ -105,6 +105,11 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun startReelDownload(url: String): Boolean {
+            return enqueueReelDownload(url, null, "video/mp4")
+        }
+
+        @JavascriptInterface
+        fun startReelDownload(url: String): Boolean {
             return enqueueReelDownload(url)
         }
     }
@@ -265,66 +270,6 @@ class MainActivity : AppCompatActivity() {
             enqueueReelDownload(url, userAgent, mimeType)
         }
 
-        private fun enqueueReelDownload(
-            url: String,
-            userAgent: String? = null,
-            mimeType: String? = null
-        ): Boolean {
-            return try {
-                val request = DownloadManager.Request(Uri.parse(url)).apply {
-                    setMimeType(mimeType ?: "video/mp4")
-                    setTitle("Frianzo video")
-                    setDescription("Saving video from Frianzo")
-                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Frianzo-" + System.currentTimeMillis() + ".mp4")
-                    userAgent?.let { addRequestHeader("User-Agent", it) }
-                    CookieManager.getInstance().getCookie(url)?.let { cookies ->
-                        if (cookies.isNotBlank()) addRequestHeader("Cookie", cookies)
-                    }
-                    setAllowedOverMetered(true)
-                    setAllowedOverRoaming(true)
-                }
-                val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-                val downloadId = manager.enqueue(request)
-                Toast.makeText(this, "Download started", Toast.LENGTH_SHORT).show()
-                monitorReelDownload(downloadId)
-                true
-            } catch (e: Exception) {
-                Log.e(TAG, "Video save failed", e)
-                Toast.makeText(this, "Unable to save video", Toast.LENGTH_SHORT).show()
-                false
-            }
-        }
-
-        private fun monitorReelDownload(downloadId: Long) {
-            val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
-            val handler = android.os.Handler(mainLooper)
-            val poller = object : Runnable {
-                override fun run() {
-                    val cursor = manager.query(DownloadManager.Query().setFilterById(downloadId))
-                    cursor.use {
-                        if (!it.moveToFirst()) { dispatchDownloadEvent(downloadId, "error", 0); return }
-                        val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                        val total = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                        val soFar = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                        val progress = if (total > 0) ((soFar * 100L) / total).toInt().coerceIn(0, 100) else 0
-                        when (status) {
-                            DownloadManager.STATUS_PENDING, DownloadManager.STATUS_RUNNING -> { dispatchDownloadEvent(downloadId, "progress", progress); handler.postDelayed(this, 300) }
-                            DownloadManager.STATUS_SUCCESSFUL -> dispatchDownloadEvent(downloadId, "complete", 100)
-                            DownloadManager.STATUS_FAILED -> dispatchDownloadEvent(downloadId, "error", progress)
-                            else -> handler.postDelayed(this, 500)
-                        }
-                    }
-                }
-            }
-            handler.post(poller)
-        }
-
-        private fun dispatchDownloadEvent(downloadId: Long, status: String, progress: Int) {
-            val script = "window.dispatchEvent(new CustomEvent('frianzo-download-progress',{detail:{id:" + downloadId + ",status:'" + status + "',progress:" + progress + "}}));"
-            webView.post { webView.evaluateJavascript(script, null) }
-        }
-
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 updateSwipeRefreshForUrl(request.url)
@@ -378,6 +323,69 @@ class MainActivity : AppCompatActivity() {
                 webView.loadUrl(notificationTargetUrl(intent) ?: SITE_URL)
             }
         }
+    }
+
+    private fun enqueueReelDownload(
+        url: String,
+        userAgent: String? = null,
+        mimeType: String? = null
+    ): Boolean {
+        return try {
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                setMimeType(mimeType ?: "video/mp4")
+                setTitle("Frianzo video")
+                setDescription("Saving video from Frianzo")
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Frianzo-" + System.currentTimeMillis() + ".mp4")
+                userAgent?.let { addRequestHeader("User-Agent", it) }
+                CookieManager.getInstance().getCookie(url)?.let { cookies ->
+                    if (cookies.isNotBlank()) addRequestHeader("Cookie", cookies)
+                }
+                setAllowedOverMetered(true)
+                setAllowedOverRoaming(true)
+            }
+            val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+            val downloadId = manager.enqueue(request)
+            runOnUiThread { Toast.makeText(this, "Download started", Toast.LENGTH_SHORT).show() }
+            monitorReelDownload(downloadId)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Video save failed", e)
+            runOnUiThread { Toast.makeText(this, "Unable to save video", Toast.LENGTH_SHORT).show() }
+            false
+        }
+    }
+
+    private fun monitorReelDownload(downloadId: Long) {
+        val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+        val handler = android.os.Handler(mainLooper)
+        val poller = object : Runnable {
+            override fun run() {
+                val cursor = manager.query(DownloadManager.Query().setFilterById(downloadId))
+                cursor.use {
+                    if (!it.moveToFirst()) { dispatchDownloadEvent(downloadId, "error", 0); return }
+                    val status = it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                    val total = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                    val soFar = it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                    val progress = if (total > 0) ((soFar * 100L) / total).toInt().coerceIn(0, 100) else 0
+                    when (status) {
+                        DownloadManager.STATUS_PENDING, DownloadManager.STATUS_RUNNING -> {
+                            dispatchDownloadEvent(downloadId, "progress", progress)
+                            handler.postDelayed(this, 300)
+                        }
+                        DownloadManager.STATUS_SUCCESSFUL -> dispatchDownloadEvent(downloadId, "complete", 100)
+                        DownloadManager.STATUS_FAILED -> dispatchDownloadEvent(downloadId, "error", progress)
+                        else -> handler.postDelayed(this, 500)
+                    }
+                }
+            }
+        }
+        handler.post(poller)
+    }
+
+    private fun dispatchDownloadEvent(downloadId: Long, status: String, progress: Int) {
+        val script = "window.dispatchEvent(new CustomEvent('frianzo-download-progress',{detail:{id:" + downloadId + ",status:'" + status + "',progress:" + progress + "}}));"
+        webView.post { webView.evaluateJavascript(script, null) }
     }
 
     private fun loadInstallReferrer() {
@@ -698,182 +706,3 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun generateDiagnosticMessage(error: Throwable): String {
-        return buildString {
-            append("Message: ")
-            append(error.message ?: error.localizedMessage ?: "<none>")
-            append("\nCause: ")
-            append(error.cause?.message ?: "<none>")
-            append("\nException: ")
-            append(error.toString())
-        }.take(2000)
-    }
-
-    private fun fetchGoogleServerClientId(): String {
-        val connection = (URL("$API_URL$GOOGLE_CONFIG_PATH").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = HTTP_TIMEOUT_MS
-            readTimeout = HTTP_TIMEOUT_MS
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Origin", SITE_URL)
-        }
-
-        return try {
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Empty Google config response (HTTP $responseCode)")
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("Google config request failed: HTTP $responseCode $response")
-            }
-            val root = JSONObject(response)
-            root.getJSONObject("data").getString("clientId")
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun nativeGoogleLogin(idToken: String, nonce: String, deviceToken: String?): NativeLoginResult {
-        val connection = (URL("$API_URL$GOOGLE_NATIVE_LOGIN_PATH").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = HTTP_TIMEOUT_MS
-            readTimeout = HTTP_TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Origin", SITE_URL)
-        }
-
-        val body = JSONObject().apply {
-            put("idToken", idToken)
-            put("nonce", nonce)
-            if (!deviceToken.isNullOrEmpty()) put("deviceToken", deviceToken)
-        }.toString()
-
-        return try {
-            connection.outputStream.bufferedWriter().use { it.write(body) }
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Empty authentication response (HTTP $responseCode)")
-
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("Google authentication failed: HTTP $responseCode $response")
-            }
-
-            val data = JSONObject(response).getJSONObject("data")
-            NativeLoginResult(
-                token = data.getString("token"),
-                deviceToken = data.getString("deviceToken"),
-                isNewUser = data.getBoolean("isNewUser")
-            )
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun setAuthCookies(token: String, deviceToken: String) {
-        val cookieManager = CookieManager.getInstance()
-        cookieManager.setAcceptCookie(true)
-        cookieManager.setAcceptThirdPartyCookies(webView, true)
-
-        val opts = "Path=/; Secure; SameSite=None; Domain=.frianzo.online"
-
-        cookieManager.setCookie(API_URL, "vynzo_auth_token=$token; $opts")
-        cookieManager.setCookie(API_URL, "vynzo_token=$token; $opts")
-        cookieManager.setCookie(API_URL, "vynzo_device=$deviceToken; $opts")
-        cookieManager.setCookie(SITE_URL, "vynzo_auth_token=$token; $opts")
-        cookieManager.setCookie(SITE_URL, "vynzo_token=$token; $opts")
-        cookieManager.setCookie(SITE_URL, "vynzo_device=$deviceToken; $opts")
-        cookieManager.flush()
-    }
-
-    private fun getCookieValue(name: String): String? {
-        val cookieManager = CookieManager.getInstance()
-        val fromApi = cookieManager.getCookie(API_URL)
-        val fromSite = cookieManager.getCookie(SITE_URL)
-        val all = listOfNotNull(fromApi, fromSite).joinToString(";")
-        if (all.isBlank()) return null
-        return all.split(';').map { it.trim() }
-            .firstOrNull { it.startsWith("$name=") }
-            ?.substringAfter('=')
-            ?.takeIf { it.isNotEmpty() }
-    }
-
-    private fun generateSecureRandomNonce(byteLength: Int = 32): String {
-        val bytes = ByteArray(byteLength)
-        SecureRandom().nextBytes(bytes)
-        return Base64.encodeToString(bytes, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
-    }
-
-    private fun openExternal(uri: Uri): Boolean = try {
-        startActivity(Intent(Intent.ACTION_VIEW, uri))
-        true
-    } catch (_: ActivityNotFoundException) { false }
-
-    private fun isOAuthCallback(uri: Uri): Boolean =
-        uri.scheme.equals(OAUTH_SCHEME, ignoreCase = true) &&
-            uri.host.equals(OAUTH_HOST, ignoreCase = true) &&
-            uri.path.equals("/callback", ignoreCase = true)
-
-    private fun handleOAuthCallback(uri: Uri) {
-        val error = uri.getQueryParameter("error")
-        if (!error.isNullOrEmpty()) {
-            webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
-            return
-        }
-
-        val token = uri.getQueryParameter("token")
-        val deviceToken = uri.getQueryParameter("device")
-        val isNewUser = uri.getQueryParameter("newUser") == "1"
-
-        if (token.isNullOrEmpty() || deviceToken.isNullOrEmpty()) {
-            webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
-            return
-        }
-
-        setAuthCookies(token, deviceToken)
-        val destination = if (isNewUser) "/profile-setup" else "/"
-        webView.loadUrl("$SITE_URL$destination")
-    }
-
-    private data class GoogleCredentialResult(
-        val response: androidx.credentials.GetCredentialResponse,
-        val nonce: String
-    )
-
-    private data class NativeLoginResult(
-        val token: String,
-        val deviceToken: String,
-        val isNewUser: Boolean
-    )
-
-    override fun onResume() {
-        super.onResume()
-        webView.onResume()
-        webView.resumeTimers()
-    }
-
-    override fun onPause() {
-        webView.onPause()
-        webView.pauseTimers()
-        super.onPause()
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
-            webView.goBack()
-            return true
-        }
-        return super.onKeyDown(keyCode, event)
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        webView.saveState(outState)
-    }
-
-    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
-        super.onRestoreInstanceState(savedInstanceState)
-        webView.restoreState(savedInstanceState)
-    }
-}
