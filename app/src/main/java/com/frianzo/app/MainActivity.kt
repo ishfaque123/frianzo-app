@@ -338,7 +338,7 @@ class MainActivity : AppCompatActivity() {
             if (oauthUri != null && isOAuthCallback(oauthUri)) {
                 webView.post { handleOAuthCallback(oauthUri) }
             } else {
-                webView.loadUrl(notificationTargetUrl(intent) ?: defaultStartUrl())
+                webView.loadUrl(intentTargetUrl(intent) ?: defaultStartUrl())
             }
         }
     }
@@ -541,6 +541,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Where an incoming intent wants the WebView to go. Notification taps carry
+     * a "url" path extra; app shortcuts and app links arrive as a VIEW data Uri
+     * for a frianzo.online page. Returns null for anything else (including the
+     * frianzo:// OAuth callback, which is handled separately).
+     */
+    private fun intentTargetUrl(intent: Intent?): String? {
+        notificationTargetUrl(intent)?.let { return it }
+        val data = intent?.data ?: return null
+        val scheme = data.scheme?.lowercase() ?: return null
+        if (scheme != "http" && scheme != "https") return null
+        val host = data.host?.lowercase() ?: return null
+        if (host != SITE_HOST && host != "www.$SITE_HOST") return null
+        val path = data.path ?: return null
+        if (!path.startsWith("/") || path.startsWith("//")) return null
+        val query = data.encodedQuery
+        return "$SITE_URL$path" + (if (query != null) "?$query" else "")
+    }
+
+    /**
      * Whether the launch UI should use the dark variant. Reads the theme the
      * web app last reported via NativeBridge.setAppTheme(); on first run
      * (nothing reported yet) falls back to the system night mode, mirroring
@@ -570,7 +589,7 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
-        notificationTargetUrl(intent)?.let { webView.loadUrl(it) }
+        intentTargetUrl(intent)?.let { webView.loadUrl(it) }
         val oauthUri = intent?.data
         if (oauthUri != null && isOAuthCallback(oauthUri)) {
             handleOAuthCallback(oauthUri)

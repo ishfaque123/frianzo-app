@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">Frianzo</string>
+    <string name="shortcut_new_post">New post</string>
+    <string name="shortcut_new_post_long">Create a new post</string>
+    <string name="shortcut_messages">Messages</string>
+    <string name="shortcut_messages_long">Open your messages</string>
+    <string name="shortcut_reels">Reels</string>
+    <string name="shortcut_reels_long">Watch reels</string>
 </resources>
