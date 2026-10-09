@@ -15,6 +15,9 @@ import android.content.Intent
 import android.content.MutableContextWrapper
 import android.content.res.Configuration
 import android.provider.MediaStore
+import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
+import android.webkit.WebResourceResponse
 import androidx.core.content.FileProvider
 import java.io.File
 import android.net.Uri
@@ -57,6 +60,8 @@ import java.net.URL
 import java.security.SecureRandom
 import java.security.MessageDigest
 import java.nio.charset.StandardCharsets
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class MainActivity : AppCompatActivity() {
 
@@ -121,6 +126,11 @@ class MainActivity : AppCompatActivity() {
     }
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var cameraCaptureUri: Uri? = null
+
+    /** A file staged from an incoming Android share-sheet intent, served to the
+     * WebView at /__share/<token> so the compose page can attach it. */
+    private data class StagedShare(val file: File, val mimeType: String, val name: String)
+    private val stagedShares = ConcurrentHashMap<String, StagedShare>()
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val capturedUri = cameraCaptureUri
         cameraCaptureUri = null
@@ -317,6 +327,28 @@ class MainActivity : AppCompatActivity() {
                 swipeRefresh.isRefreshing = false
                 tryClaimReferral()
             }
+
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: WebResourceRequest
+            ): WebResourceResponse? {
+                // Serve files staged from an incoming share-sheet intent so the
+                // compose page can fetch and attach them: /__share/<token>.
+                // Same-origin with the site, so no CORS issues.
+                val url = request.url
+                if (url.scheme == "https" && url.host == SITE_HOST &&
+                    url.pathSegments.size >= 2 && url.pathSegments[0] == "__share"
+                ) {
+                    val staged = stagedShares[url.pathSegments[1]] ?: return null
+                    return try {
+                        WebResourceResponse(staged.mimeType, null, staged.file.inputStream())
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to serve staged share", e)
+                        null
+                    }
+                }
+                return null
+            }
         }
 
         // The web page's own header (Frianzo logo bar) and 4-icon nav
@@ -334,11 +366,16 @@ class MainActivity : AppCompatActivity() {
         swipeRefresh.setOnRefreshListener { webView.reload() }
 
         if (savedInstanceState == null) {
-            val oauthUri = intent?.data
-            if (oauthUri != null && isOAuthCallback(oauthUri)) {
-                webView.post { handleOAuthCallback(oauthUri) }
+            val action = intent?.action
+            if (action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE) {
+                intent?.let { handleShareIntent(it) }
             } else {
-                webView.loadUrl(notificationTargetUrl(intent) ?: defaultStartUrl())
+                val oauthUri = intent?.data
+                if (oauthUri != null && isOAuthCallback(oauthUri)) {
+                    webView.post { handleOAuthCallback(oauthUri) }
+                } else {
+                    webView.loadUrl(notificationTargetUrl(intent) ?: defaultStartUrl())
+                }
             }
         }
     }
@@ -541,6 +578,96 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Handles an incoming Android share-sheet intent (ACTION_SEND /
+     * ACTION_SEND_MULTIPLE): stages shared image/video files into the app
+     * cache and opens the compose page, which fetches the staged file from
+     * /__share/<token> and attaches it. Shared text goes in as prefilled
+     * compose content via query param.
+     */
+    private fun handleShareIntent(intent: Intent) {
+        clearStagedShares()
+        val mime = intent.type ?: ""
+        if (intent.action == Intent.ACTION_SEND && mime.startsWith("text/")) {
+            val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+            webView.loadUrl(
+                if (text != null) "$SITE_URL/compose?shared_text=${Uri.encode(text)}"
+                else "$SITE_URL/compose"
+            )
+            return
+        }
+        val uris = if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
+            intent.parcelableUriListExtra(Intent.EXTRA_STREAM)
+        } else {
+            listOfNotNull(intent.parcelableUriExtra(Intent.EXTRA_STREAM))
+        }.filter { uri ->
+            val t = contentResolver.getType(uri) ?: ""
+            t.startsWith("image/") || t.startsWith("video/")
+        }
+        // Compose takes a single attachment; use the first shared item.
+        // (A shared video is routed to the reels flow by the compose page.)
+        // A shared caption (e.g. WhatsApp) is prefilled as the post text.
+        val staged = uris.firstOrNull()?.let { stageSharedUri(it) }
+        if (staged == null) {
+            webView.loadUrl("$SITE_URL/compose")
+            return
+        }
+        val (token, share) = staged
+        val caption = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
+        var url = "$SITE_URL/compose?share=$token&name=${Uri.encode(share.name)}"
+        if (caption != null) url += "&shared_text=${Uri.encode(caption)}"
+        webView.loadUrl(url)
+    }
+
+    private fun stageSharedUri(uri: Uri): Pair<String, StagedShare>? {
+        return try {
+            val resolver = contentResolver
+            val mime = resolver.getType(uri) ?: return null
+            var name = "shared_${System.currentTimeMillis()}"
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0)?.takeIf { it.isNotBlank() }?.let { name = it }
+            }
+            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)
+            val dir = File(cacheDir, "share_inbox").apply { mkdirs() }
+            val dest = File(dir, "${UUID.randomUUID()}${if (!ext.isNullOrEmpty()) ".$ext" else ""}")
+            resolver.openInputStream(uri)?.use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            } ?: return null
+            if (!dest.exists() || dest.length() == 0L) {
+                dest.delete()
+                return null
+            }
+            val token = UUID.randomUUID().toString()
+            val share = StagedShare(dest, mime, name)
+            stagedShares[token] = share
+            token to share
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to stage shared file", e)
+            null
+        }
+    }
+
+    private fun clearStagedShares() {
+        stagedShares.values.forEach { runCatching { it.file.delete() } }
+        stagedShares.clear()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.parcelableUriExtra(name: String): Uri? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(name, Uri::class.java)
+        } else {
+            getParcelableExtra(name)
+        }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.parcelableUriListExtra(name: String): List<Uri> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableArrayListExtra(name, Uri::class.java)?.toList() ?: emptyList()
+        } else {
+            getParcelableArrayListExtra<Uri>(name)?.toList() ?: emptyList()
+        }
+
+    /**
      * Whether the launch UI should use the dark variant. Reads the theme the
      * web app last reported via NativeBridge.setAppTheme(); on first run
      * (nothing reported yet) falls back to the system night mode, mirroring
@@ -570,6 +697,11 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
+        val action = intent?.action
+        if (action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE) {
+            intent?.let { handleShareIntent(it) }
+            return
+        }
         notificationTargetUrl(intent)?.let { webView.loadUrl(it) }
         val oauthUri = intent?.data
         if (oauthUri != null && isOAuthCallback(oauthUri)) {
