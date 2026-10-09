@@ -315,7 +315,7 @@ class MainActivity : AppCompatActivity() {
             if (oauthUri != null && isOAuthCallback(oauthUri)) {
                 webView.post { handleOAuthCallback(oauthUri) }
             } else {
-                webView.loadUrl(notificationTargetUrl(intent) ?: SITE_URL)
+                webView.loadUrl(notificationTargetUrl(intent) ?: defaultStartUrl())
             }
         }
     }
@@ -516,6 +516,18 @@ class MainActivity : AppCompatActivity() {
         val path = intent?.getStringExtra("url") ?: return null
         return if (path.startsWith("/") && !path.startsWith("//")) "$SITE_URL$path" else null
     }
+
+    /**
+     * Start on /login when there is no auth session, so a logged-out user never
+     * sees the SSR marketing page flash inside the app's WebView before the
+     * web client redirects. Logged-in users still land on the feed via SITE_URL.
+     */
+    private fun defaultStartUrl(): String =
+        if (hasAuthSession()) SITE_URL else "$SITE_URL/login"
+
+    private fun hasAuthSession(): Boolean =
+        !getCookieValue("vynzo_auth_token").isNullOrBlank() ||
+            !getCookieValue("vynzo_token").isNullOrBlank()
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
