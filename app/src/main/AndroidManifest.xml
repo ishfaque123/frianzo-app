@@ -52,11 +52,6 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="frianzo.online" />
             </intent-filter>
-
-            <!-- Launcher long-press shortcuts: New post / Messages / Reels. -->
-            <meta-data
-                android:name="android.app.shortcuts"
-                android:resource="@xml/shortcuts" />
         </activity>
 
         <provider
