@@ -1,4 +1,7 @@
 <resources>
     <color name="frianzo_navy">#0B1F3A</color>
     <color name="frianzo_gold">#D4AF37</color>
+    <!-- Matches the web dark-theme body background (globals.css: html.dark body),
+         so the native launch colors blend seamlessly into web content. -->
+    <color name="frianzo_dark_bg">#1e2530</color>
 </resources>

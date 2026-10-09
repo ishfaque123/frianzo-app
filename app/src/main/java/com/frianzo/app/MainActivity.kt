@@ -13,6 +13,7 @@ import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.MutableContextWrapper
+import android.content.res.Configuration
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import java.io.File
@@ -103,6 +104,16 @@ class MainActivity : AppCompatActivity() {
             CookieManager.getInstance().flush()
         }
 
+        // Called by the web ThemeProvider whenever the theme is applied, so the
+        // native launch colors (splash / window / WebView background) can match
+        // the user's selected theme on the next cold start.
+        @JavascriptInterface
+        fun setAppTheme(theme: String) {
+            if (theme != "dark" && theme != "light") return
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putString(KEY_APP_THEME, theme).apply()
+        }
+
         @JavascriptInterface
         fun startReelDownload(url: String): Boolean {
             return enqueueReelDownload(url)
@@ -139,16 +150,28 @@ class MainActivity : AppCompatActivity() {
         private const val GOOGLE_CONFIG_PATH = "/api/auth/google/native-config"
         private const val GOOGLE_NATIVE_LOGIN_PATH = "/api/auth/google/native"
         private const val HTTP_TIMEOUT_MS = 15000
+        private const val PREFS_NAME = "frianzo_prefs"
+        private const val KEY_APP_THEME = "app_theme"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
-        setTheme(R.style.Theme_Frianzo)
+        // Pick the launch theme from the web theme the app last reported
+        // ('dark'/'light'), falling back to the system night mode on first
+        // run. Must run before super.onCreate() so the window is created with
+        // the theme-matching splash instead of the static manifest one.
+        val darkTheme = isDarkTheme()
+        setTheme(if (darkTheme) R.style.Theme_Frianzo_Splash_Dark else R.style.Theme_Frianzo_Splash_Light)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         webView = findViewById(R.id.webview)
-        webView.setBackgroundColor(ContextCompat.getColor(this, R.color.frianzo_navy))
+        webView.setBackgroundColor(
+            ContextCompat.getColor(
+                this,
+                if (darkTheme) R.color.frianzo_dark_bg else android.R.color.white
+            )
+        )
         swipeRefresh = findViewById(R.id.swipe_refresh)
         credentialManager = CredentialManager.create(this)
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
@@ -515,6 +538,21 @@ class MainActivity : AppCompatActivity() {
     private fun notificationTargetUrl(intent: Intent?): String? {
         val path = intent?.getStringExtra("url") ?: return null
         return if (path.startsWith("/") && !path.startsWith("//")) "$SITE_URL$path" else null
+    }
+
+    /**
+     * Whether the launch UI should use the dark variant. Reads the theme the
+     * web app last reported via NativeBridge.setAppTheme(); on first run
+     * (nothing reported yet) falls back to the system night mode, mirroring
+     * the web ThemeProvider's 'system' behavior.
+     */
+    private fun isDarkTheme(): Boolean {
+        when (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_APP_THEME, null)) {
+            "dark" -> return true
+            "light" -> return false
+        }
+        val nightMask = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        return nightMask == Configuration.UI_MODE_NIGHT_YES
     }
 
     /**

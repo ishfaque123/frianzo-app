@@ -10,4 +10,34 @@
     <style name="Theme.Frianzo.Splash">
         <item name="android:windowBackground">@drawable/splash_background</item>
     </style>
+
+    <!-- Theme-matching variants. The launch colors follow the user's selected
+         web theme (dark/light) instead of the hardcoded navy, so there is no
+         two-tone jump between the splash and the web content. MainActivity
+         picks the right one before super.onCreate() based on the theme the
+         web app last reported (falling back to the system night mode). -->
+    <style name="Theme.Frianzo.Dark" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/frianzo_navy</item>
+        <item name="colorPrimaryDark">@color/frianzo_navy</item>
+        <item name="colorAccent">@color/frianzo_gold</item>
+        <item name="android:statusBarColor">@color/frianzo_dark_bg</item>
+        <item name="android:windowBackground">@color/frianzo_dark_bg</item>
+    </style>
+
+    <style name="Theme.Frianzo.Light" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/frianzo_navy</item>
+        <item name="colorPrimaryDark">@color/frianzo_navy</item>
+        <item name="colorAccent">@color/frianzo_gold</item>
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+
+    <style name="Theme.Frianzo.Splash.Dark" parent="Theme.Frianzo.Dark">
+        <item name="android:windowBackground">@drawable/splash_background_dark</item>
+    </style>
+
+    <style name="Theme.Frianzo.Splash.Light" parent="Theme.Frianzo.Light">
+        <item name="android:windowBackground">@drawable/splash_background_light</item>
+    </style>
 </resources>
