@@ -95,6 +95,133 @@ jobs:
       - name: Copy AAB
         run: |
           cp app/build/outputs/bundle/release/*.aab app/build/outputs/bundle/release/Frianzo-release.aab
+name: Build Frianzo Android App
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android 36 SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Download Frianzo logo from frontend
+        run: |
+          curl -fL "https://raw.githubusercontent.com/ishfaque123/vynzo-frontend/main/public/logo.png" -o /tmp/frianzo-logo.png
+          for dir in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            cp /tmp/frianzo-logo.png "app/src/main/res/mipmap-$dir/ic_launcher.png"
+            cp /tmp/frianzo-logo.png "app/src/main/res/mipmap-$dir/ic_launcher_round.png"
+          done
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.11.1
+
+      - name: Decode release keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > frianzo-release.keystore
+
+      - name: Print Release Keystore SHA-1 and SHA-256
+        run: |
+          echo "========================================"
+          echo "=== Release Keystore Fingerprints ==="
+          echo "========================================"
+          keytool -list -v -keystore frianzo-release.keystore -alias frianzo -storepass "${{ secrets.KEYSTORE_PASSWORD }}" -keypass "${{ secrets.KEY_PASSWORD }}" | grep -E "(SHA1|SHA256|Owner|Alias name):"
+          echo "========================================"
+          echo "Copy the SHA1 and SHA256 values above"
+          echo "and add them in Firebase Console"
+          echo "========================================"
+
+      - name: Build debug APK
+        run: |
+          for attempt in 1 2 3; do
+            echo "Build debug APK attempt $attempt"
+            if gradle assembleDebug --no-daemon; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Dependency resolution/build failed; waiting 30 seconds before retry..."
+              sleep 30
+            fi
+          done
+          exit 1
+        env:
+          KEYSTORE_PATH: frianzo-release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: frianzo
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Build release AAB
+        run: gradle bundleRelease --no-daemon
+        env:
+          KEYSTORE_PATH: frianzo-release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: frianzo
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Remove keystore file
+        if: always()
+        run: rm -f frianzo-release.keystore
+
+      - name: Rename APK
+        run: |
+          mv app/build/outputs/apk/debug/*.apk app/build/outputs/apk/debug/Frianzo.apk
+
+      - name: Copy AAB
+        run: |
+          cp app/build/outputs/bundle/release/*.aab app/build/outputs/bundle/release/Frianzo-release.aab
+
+      - name: Upload APK and AAB artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Frianzo-Android
+          path: |
+            app/build/outputs/apk/debug/Frianzo.apk
+            app/build/outputs/bundle/release/Frianzo-release.aab
+
+      - name: Get version code
+        id: version
+        run: |
+          CODE=$(grep -oP 'versionCode\s*=\s*\K\d+' app/build.gradle.kts | head -1)
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Frianzo Latest
+          prerelease: false
+          make_latest: true
+          files: |
+            app/build/outputs/apk/debug/Frianzo.apk
+            app/build/outputs/bundle/release/Frianzo-release.aab
+          body: |
+            version_code:${{ steps.version.outputs.code }}
+            Built from main branch.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload APK and AAB artifacts
         uses: actions/upload-artifact@v4
