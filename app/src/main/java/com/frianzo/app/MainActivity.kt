@@ -482,8 +482,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Check GitHub for a newer APK version. Shows update dialog if available. */
+    /** Check GitHub for a newer APK version. Shows update dialog if available.
+     *  Skipped for Play Store installs - Play Store handles its own updates. */
     private fun checkForAppUpdate() {
+        // Play Store installs get updates from Play Store, not GitHub
+        val installer = packageManager.getInstallerPackageName(packageName)
+        if (installer == "com.android.vending") {
+            Log.d("Frianzo", "Play Store install - skipping GitHub update check")
+            return
+        }
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val url = URL("https://api.github.com/repos/ishfaque123/frianzo-app/releases/tags/latest")
