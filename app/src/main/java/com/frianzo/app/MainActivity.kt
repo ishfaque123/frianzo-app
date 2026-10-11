@@ -145,6 +145,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun authenticateWithBiometric() {
             runOnUiThread { showBiometricPrompt() }
+        }
 
         @JavascriptInterface
         fun startReelDownload(url: String): Boolean {
