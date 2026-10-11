@@ -202,6 +202,11 @@ class MainActivity : AppCompatActivity() {
         }
         webView.settings.setGeolocationEnabled(true)
 
+        // Disable native long-press context menu (link/image popup).
+        // The web app handles long-press itself via JavaScript touch events
+        // (e.g. post description copy, message action menu).
+        webView.setOnLongClickListener { true }
+
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
         cookieManager.setAcceptThirdPartyCookies(webView, true)
