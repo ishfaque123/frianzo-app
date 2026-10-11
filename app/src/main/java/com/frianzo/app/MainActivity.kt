@@ -48,6 +48,8 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.firebase.messaging.FirebaseMessaging
 import com.android.installreferrer.api.InstallReferrerClient
 import com.android.installreferrer.api.InstallReferrerStateListener
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -120,10 +122,63 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun isBiometricAvailable(): Boolean {
+            val mgr = BiometricManager.from(this@MainActivity)
+            return mgr.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
+                BiometricManager.BIOMETRIC_SUCCESS
+        }
+
+        @JavascriptInterface
+        fun isBiometricEnabled(): Boolean {
+            return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_BIOMETRIC_ENABLED, false)
+        }
+
+        @JavascriptInterface
+        fun setBiometricEnabled(enabled: Boolean) {
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+                .putBoolean(KEY_BIOMETRIC_ENABLED, enabled).apply()
+        }
+
+        @JavascriptInterface
+        fun authenticateWithBiometric() {
+            runOnUiThread { showBiometricPrompt() }
+        }
+
+        @JavascriptInterface
         fun startReelDownload(url: String): Boolean {
             return enqueueReelDownload(url)
         }
     }
+
+    private fun showBiometricPrompt() {
+        val executor = ContextCompat.getMainExecutor(this)
+        val prompt = BiometricPrompt(this, executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    super.onAuthenticationSucceeded(result)
+                    webView.evaluateJavascript(
+                        "window.dispatchEvent(new Event('frianzo-biometric-success'))", null)
+                }
+                override fun onAuthenticationFailed() {
+                    super.onAuthenticationFailed()
+                    webView.evaluateJavascript(
+                        "window.dispatchEvent(new Event('frianzo-biometric-failed'))", null)
+                }
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    super.onAuthenticationError(errorCode, errString)
+                    webView.evaluateJavascript(
+                        "window.dispatchEvent(new Event('frianzo-biometric-error'))", null)
+                }
+            })
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Frianzo Login")
+            .setSubtitle("Confirm your fingerprint to log in")
+            .setNegativeButtonText("Use password instead")
+            .build()
+        prompt.authenticate(promptInfo)
+    }
+
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var cameraCaptureUri: Uri? = null
 
@@ -162,6 +217,7 @@ class MainActivity : AppCompatActivity() {
         private const val HTTP_TIMEOUT_MS = 15000
         private const val PREFS_NAME = "frianzo_prefs"
         private const val KEY_APP_THEME = "app_theme"
+        private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
