@@ -179,6 +179,37 @@ class MainActivity : AppCompatActivity() {
         prompt.authenticate(promptInfo)
     }
 
+    private var pendingStartUrl: String? = null
+
+    private fun isBiometricEnabledForLaunch(): Boolean {
+        return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(KEY_BIOMETRIC_ENABLED, false)
+    }
+
+    private fun showBiometricPromptForLaunch() {
+        val executor = ContextCompat.getMainExecutor(this)
+        val prompt = BiometricPrompt(this, executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    super.onAuthenticationSucceeded(result)
+                    pendingStartUrl?.let { webView.loadUrl(it) }
+                    pendingStartUrl = null
+                }
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    super.onAuthenticationError(errorCode, errString)
+                    // On cancel/error, load normally so user can login manually
+                    pendingStartUrl?.let { webView.loadUrl(it) }
+                    pendingStartUrl = null
+                }
+            })
+        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Frianzo")
+            .setSubtitle("Unlock with your fingerprint")
+            .setNegativeButtonText("Cancel")
+            .build()
+        prompt.authenticate(promptInfo)
+    }
+
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var cameraCaptureUri: Uri? = null
 
@@ -435,7 +466,14 @@ class MainActivity : AppCompatActivity() {
                 if (oauthUri != null && isOAuthCallback(oauthUri)) {
                     webView.post { handleOAuthCallback(oauthUri) }
                 } else {
-                    webView.loadUrl(notificationTargetUrl(intent) ?: defaultStartUrl())
+                    val startUrl = notificationTargetUrl(intent) ?: defaultStartUrl()
+                    // If biometric login is enabled, ask for fingerprint before loading
+                    if (isBiometricEnabledForLaunch()) {
+                        pendingStartUrl = startUrl
+                        showBiometricPromptForLaunch()
+                    } else {
+                        webView.loadUrl(startUrl)
+                    }
                 }
             }
         }
