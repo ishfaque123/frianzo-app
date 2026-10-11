@@ -51,8 +51,6 @@ import com.android.installreferrer.api.InstallReferrerStateListener
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -142,17 +140,6 @@ class MainActivity : AppCompatActivity() {
         fun setBiometricEnabled(enabled: Boolean) {
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
                 .putBoolean(KEY_BIOMETRIC_ENABLED, enabled).apply()
-            if (enabled) {
-                // Save current auth cookies for biometric unlock
-                saveAuthCookiesForBiometric()
-            } else {
-                // Clear saved biometric credentials
-                try {
-                    getBiometricPrefs().edit().clear().apply()
-                } catch (e: Exception) {
-                    Log.e("Frianzo", "Failed to clear biometric prefs", e)
-                }
-            }
         }
 
         @JavascriptInterface
@@ -164,53 +151,15 @@ class MainActivity : AppCompatActivity() {
             return enqueueReelDownload(url)
         }
     }
-    /** Encrypted prefs for biometric-saved auth cookies. */
-    private fun getBiometricPrefs(): android.content.SharedPreferences {
-        val masterKey = MasterKey.Builder(this)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        return EncryptedSharedPreferences.create(
-            this,
-            BIOMETRIC_PREFS,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    }
-
-    /** Save current WebView auth cookies for biometric unlock. */
-    private fun saveAuthCookiesForBiometric() {
-        try {
-            val cm = CookieManager.getInstance()
-            val authCookie = cm.getCookie("https://frianzo.online")
-            getBiometricPrefs().edit().putString("auth_cookies", authCookie ?: "").apply()
-        } catch (e: Exception) {
-            Log.e("Frianzo", "Failed to save biometric cookies", e)
-        }
-    }
-
-    /** Show biometric prompt; on success restore cookies and reload. */
+    /** Show biometric prompt; on success notify web, on fail allow normal login. */
     private fun showBiometricPrompt() {
         val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt(this, executor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    try {
-                        val saved = getBiometricPrefs().getString("auth_cookies", "") ?: ""
-                        if (saved.isNotEmpty()) {
-                            val cm = CookieManager.getInstance()
-                            saved.split(";").forEach { cookie ->
-                                cm.setCookie("https://frianzo.online", cookie.trim())
-                            }
-                            cm.flush()
-                        }
-                    } catch (e: Exception) {
-                        Log.e("Frianzo", "Failed to restore biometric cookies", e)
-                    }
                     webView.evaluateJavascript(
                         "window.dispatchEvent(new Event('frianzo-biometric-success'))", null)
-                    webView.reload()
                 }
                 override fun onAuthenticationFailed() {
                     super.onAuthenticationFailed()
@@ -227,7 +176,7 @@ class MainActivity : AppCompatActivity() {
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
             .setTitle("Frianzo Login")
             .setSubtitle("Confirm your fingerprint to log in")
-            .setNegativeButtonText("Cancel")
+            .setNegativeButtonText("Use password instead")
             .build()
         prompt.authenticate(promptInfo)
     }
@@ -271,7 +220,6 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "frianzo_prefs"
         private const val KEY_APP_THEME = "app_theme"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
-        private const val BIOMETRIC_PREFS = "frianzo_biometric_prefs"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
