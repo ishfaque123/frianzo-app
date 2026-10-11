@@ -457,6 +457,9 @@ class MainActivity : AppCompatActivity() {
 
         swipeRefresh.setOnRefreshListener { webView.reload() }
 
+        // Check for app updates in background
+        checkForAppUpdate()
+
         if (savedInstanceState == null) {
             val action = intent?.action
             if (action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE) {
@@ -477,6 +480,60 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** Check GitHub for a newer APK version. Shows update dialog if available. */
+    private fun checkForAppUpdate() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val url = URL("https://api.github.com/repos/ishfaque123/frianzo-app/releases/tags/latest")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
+                conn.setRequestProperty("Accept", "application/vnd.github+json")
+                if (conn.responseCode != 200) return@launch
+                val body = conn.inputStream.bufferedReader().readText()
+                val json = JSONObject(body)
+                val releaseBody = json.optString("body", "")
+                // Release body contains "version_code:XX"
+                val match = Regex("version_code:(\\d+)").find(releaseBody)
+                val latestCode = match?.groupValues?.get(1)?.toIntOrNull() ?: return@launch
+                val currentCode = packageManager.getPackageInfo(packageName, 0).let {
+                    if (Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt() else @Suppress("DEPRECATION") it.versionCode
+                }
+                if (latestCode > currentCode) {
+                    val apkUrl = "https://github.com/ishfaque123/frianzo-app/releases/download/latest/Frianzo.apk"
+                    withContext(Dispatchers.Main) { showUpdateDialog(apkUrl, latestCode) }
+                }
+            } catch (e: Exception) {
+                Log.d("Frianzo", "Update check failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun showUpdateDialog(apkUrl: String, versionCode: Int) {
+        AlertDialog.Builder(this)
+            .setTitle("Update Available")
+            .setMessage("A new version of Frianzo is available. Update now for the latest features and fixes.")
+            .setPositiveButton("Update") { _, _ ->
+                try {
+                    val request = DownloadManager.Request(Uri.parse(apkUrl)).apply {
+                        setTitle("Frianzo Update")
+                        setDescription("Downloading new version...")
+                        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                        setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Frianzo-update.apk")
+                        setMimeType("application/vnd.android.package-archive")
+                    }
+                    val manager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                    manager.enqueue(request)
+                    Toast.makeText(this, "Downloading update...", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    // Fallback: open in browser
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(apkUrl)))
+                }
+            }
+            .setNegativeButton("Later", null)
+            .show()
     }
 
     private fun enqueueReelDownload(
