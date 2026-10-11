@@ -410,7 +410,14 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
-                if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
+                if (!url.isNullOrEmpty()) {
+                    updateSwipeRefreshForUrl(Uri.parse(url))
+                    val started = Uri.parse(url)
+                    if (started.scheme == "https" && started.host == API_HOST &&
+                        started.path?.startsWith("/api/auth/google") == true) {
+                        markOAuthInProgress()
+                    }
+                }
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -898,6 +905,7 @@ class MainActivity : AppCompatActivity() {
 
         if (scheme == "https" && host == API_HOST && path == GOOGLE_START_PATH) {
             Log.i(TAG, "Intercepted Google start URL, launching native sign-in")
+            markOAuthInProgress()
             launchNativeGoogleSignIn()
             return true
         }
@@ -1171,7 +1179,28 @@ class MainActivity : AppCompatActivity() {
             uri.host.equals(OAUTH_HOST, ignoreCase = true) &&
             uri.path.equals("/callback", ignoreCase = true)
 
+    // OAuth CSRF protection: only accept frianzo://oauth/callback if THIS app
+    // started a Google OAuth flow recently. Blocks malicious apps from firing
+    // the deep link with their own token to hijack the victim's session.
+    private var oAuthInProgress = false
+    private var oAuthStartTime = 0L
+
+    private fun markOAuthInProgress() {
+        oAuthInProgress = true
+        oAuthStartTime = System.currentTimeMillis()
+        Log.i(TAG, "OAuth flow started - callback accepted for 10 min")
+    }
+
     private fun handleOAuthCallback(uri: Uri) {
+        val elapsed = System.currentTimeMillis() - oAuthStartTime
+        if (!oAuthInProgress || elapsed > 10 * 60 * 1000) {
+            Log.w(TAG, "Rejected OAuth callback - no OAuth flow in progress (possible CSRF)")
+            oAuthInProgress = false
+            webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
+            return
+        }
+        oAuthInProgress = false // single-use
+
         val error = uri.getQueryParameter("error")
         if (!error.isNullOrEmpty()) {
             webView.loadUrl("$SITE_URL/login?error=google_auth_failed")
