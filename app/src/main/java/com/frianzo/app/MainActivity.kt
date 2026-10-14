@@ -416,7 +416,22 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 return try {
-                    fileChooserLauncher.launch(fileChooserParams.createIntent())
+                    // Use a clean GET_CONTENT intent instead of createIntent()
+                    // to avoid the confusing app-branded picker overlay
+                    val acceptTypes = fileChooserParams.acceptTypes
+                    val mimeType = when {
+                        acceptTypes.any { it.startsWith("video/") } && acceptTypes.any { it.startsWith("image/") } -> "image/*,video/*"
+                        acceptTypes.any { it.startsWith("video/") } -> "video/*"
+                        else -> "image/*"
+                    }
+                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = if (mimeType.contains(",")) "*/*" else mimeType
+                        if (mimeType.contains(",")) {
+                            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+                        }
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                    }
+                    fileChooserLauncher.launch(intent)
                     true
                 } catch (e: ActivityNotFoundException) {
                     fileChooserCallback = null
