@@ -86,6 +86,21 @@ class MainActivity : AppCompatActivity() {
                 request?.deny()
             }
         }
+    private var pendingWebCameraPermissionRequest: PermissionRequest? = null
+    private val cameraPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val request = pendingWebCameraPermissionRequest
+            pendingWebCameraPermissionRequest = null
+            if (granted && request != null) {
+                // Grant both video and audio if both were requested
+                val resources = request.resources.filter {
+                    it == PermissionRequest.RESOURCE_VIDEO_CAPTURE || it == PermissionRequest.RESOURCE_AUDIO_CAPTURE
+                }.toTypedArray()
+                request.grant(resources)
+            } else {
+                request?.deny()
+            }
+        }
     private var pendingGeolocationRequest: Pair<String, GeolocationPermissions.Callback>? = null
     private val locationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -302,8 +317,33 @@ class MainActivity : AppCompatActivity() {
             override fun onPermissionRequest(request: PermissionRequest) {
                 runOnUiThread {
                     val wantsAudio = request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
-                    if (!wantsAudio) {
+                    val wantsVideo = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
+                    if (!wantsAudio && !wantsVideo) {
                         request.deny()
+                        return@runOnUiThread
+                    }
+
+                    // Camera requested — handle video (+audio if both)
+                    if (wantsVideo) {
+                        if (ContextCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.CAMERA
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            val toGrant = request.resources.filter {
+                                it == PermissionRequest.RESOURCE_VIDEO_CAPTURE || it == PermissionRequest.RESOURCE_AUDIO_CAPTURE
+                            }.toTypedArray()
+                            // Only grant audio too if we already have mic permission
+                            val finalGrant = toGrant.filter {
+                                it != PermissionRequest.RESOURCE_AUDIO_CAPTURE ||
+                                ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                            }.toTypedArray()
+                            request.grant(if (finalGrant.isNotEmpty()) finalGrant else arrayOf(PermissionRequest.RESOURCE_VIDEO_CAPTURE))
+                            return@runOnUiThread
+                        }
+                        pendingWebCameraPermissionRequest?.deny()
+                        pendingWebCameraPermissionRequest = request
+                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         return@runOnUiThread
                     }
 
