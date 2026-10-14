@@ -273,14 +273,15 @@ class MainActivity : AppCompatActivity() {
         // run. Must run before super.onCreate() so the window is created with
         // the theme-matching splash instead of the static manifest one.
         val darkTheme = isDarkTheme()
-        setTheme(if (darkTheme) R.style.Theme_Frianzo_Splash_Dark else R.style.Theme_Frianzo_Splash_Light)
+        // Only use splash theme on fresh launch. On recreation (e.g. returning
+        // from gallery picker), use regular theme to avoid logo flash.
+        if (savedInstanceState == null) {
+            setTheme(if (darkTheme) R.style.Theme_Frianzo_Splash_Dark else R.style.Theme_Frianzo_Splash_Light)
+        } else {
+            setTheme(if (darkTheme) R.style.Theme_Frianzo_Dark else R.style.Theme_Frianzo_Light)
+        }
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
-        // Switch from splash theme to regular theme immediately after launch.
-        // This prevents the Frianzo logo splash from flashing when returning
-        // from external activities (like the gallery picker).
-        setTheme(if (darkTheme) R.style.Theme_Frianzo_Dark else R.style.Theme_Frianzo_Light)
 
         webView = findViewById(R.id.webview)
         webView.setBackgroundColor(
