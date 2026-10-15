@@ -35,7 +35,7 @@
 
         <activity
             android:name=".MainActivity"
-            android:theme="@style/Theme.Frianzo.Splash"
+            android:theme="@style/Theme.Frianzo"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
             android:launchMode="singleTask">
