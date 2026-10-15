@@ -486,6 +486,12 @@ class MainActivity : AppCompatActivity() {
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
                 tryClaimReferral()
+                // After first page load, replace the splash window background with a
+                // plain color so the Frianzo logo never flashes when returning from
+                // external activities (e.g. gallery picker).
+                window.setBackgroundDrawableResource(
+                    if (isDarkTheme()) R.color.frianzo_dark_bg else android.R.color.white
+                )
             }
 
             override fun shouldInterceptRequest(
