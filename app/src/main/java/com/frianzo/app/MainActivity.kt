@@ -41,6 +41,7 @@ import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
+import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
@@ -1070,6 +1071,14 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "All-accounts Google ID fallback succeeded")
                 GoogleCredentialResult(response, fallbackNonce)
             } catch (fallbackError: GetCredentialException) {
+                // USER CANCELED (2026-10-17): if the user dismissed the account picker,
+                // silently abort — don't show a scary error dialog. Re-throw the
+                // cancellation so the caller can return quietly.
+                if (e is GetCredentialCancellationException ||
+                    fallbackError is GetCredentialCancellationException) {
+                    Log.i(TAG, "User canceled Google sign-in; aborting silently")
+                    throw fallbackError
+                }
                 Log.e(TAG, "Google ID fallback failed: " + fallbackError::class.java.name + ": " + fallbackError.message, fallbackError)
                 throw IllegalStateException(
                     "Google Credential Manager failed in both flows. Primary: " +
@@ -1122,6 +1131,10 @@ class MainActivity : AppCompatActivity() {
                 val destination = if (loginResult.isNewUser) "/profile-setup" else "/"
                 webView.loadUrl("$SITE_URL$destination")
                 Log.i(TAG, "Step 5: Cookies set, navigating to $destination")
+            } catch (e: GetCredentialCancellationException) {
+                // User dismissed the Google account picker — not an error.
+                // Silently return to the login screen (fix 2026-10-17).
+                Log.i(TAG, "Google sign-in canceled by user; no error shown")
             } catch (e: Exception) {
                 val cause = generateDiagnosticMessage(e)
                 Log.e(TAG, "Native Google sign-in failed: $cause", e)
