@@ -307,8 +307,15 @@ class MainActivity : AppCompatActivity() {
             // WebView blocks sound for videos that weren't started by a tap,
             // so some reels stayed muted. Allow autoplay with sound.
             mediaPlaybackRequiresUserGesture = false
+            // PERFORMANCE (2026-10-17): reduce glitching on low-end devices
+            loadsImagesAutomatically = true
+            blockNetworkImage = false
+            // Enable smooth scrolling and hardware rendering
+            setRenderPriority(android.webkit.WebSettings.RenderPriority.HIGH)
         }
         webView.settings.setGeolocationEnabled(true)
+        // PERFORMANCE: force hardware layer for smoother scrolling/video
+        webView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
         // Disable native long-press context menu (link/image popup).
         // The web app handles long-press itself via JavaScript touch events
