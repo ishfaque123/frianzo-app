@@ -502,6 +502,18 @@ class MainActivity : AppCompatActivity() {
                 )
             }
 
+            override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
+                // WebView renderer crashed - reload instead of crashing app
+                // This fixes the open/close crash loop
+                Log.e(TAG, "WebView renderer crashed, reloading")
+                try {
+                    view.loadUrl(SITE_URL)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to reload WebView", e)
+                }
+                return true
+            }
+
             override fun shouldInterceptRequest(
                 view: WebView,
                 request: WebResourceRequest
