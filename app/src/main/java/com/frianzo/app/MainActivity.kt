@@ -89,10 +89,11 @@ class MainActivity : AppCompatActivity() {
         }
     private var pendingWebCameraPermissionRequest: PermissionRequest? = null
     private val cameraPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             val request = pendingWebCameraPermissionRequest
             pendingWebCameraPermissionRequest = null
-            if (granted && request != null) {
+            val cameraGranted = grants[Manifest.permission.CAMERA] == true
+            if (cameraGranted && request != null) {
                 // Grant both video and audio if both were requested
                 val resources = request.resources.filter {
                     it == PermissionRequest.RESOURCE_VIDEO_CAPTURE || it == PermissionRequest.RESOURCE_AUDIO_CAPTURE
@@ -357,7 +358,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         pendingWebCameraPermissionRequest?.deny()
                         pendingWebCameraPermissionRequest = request
-                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        cameraPermissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
                         return@runOnUiThread
                     }
 
@@ -494,12 +495,57 @@ class MainActivity : AppCompatActivity() {
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
                 tryClaimReferral()
+                // Proactively request camera permission on camera page so that
+                // when the website calls getUserMedia, the permission is already
+                // granted and onPermissionRequest can immediately grant it.
+                // This fixes the "Camera access denied" timing issue.
+                if (!url.isNullOrEmpty() && url.contains("/reels/camera")) {
+                    val cameraGranted = ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                    val micGranted = ContextCompat.checkSelfPermission(
+                        this@MainActivity,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (!cameraGranted || !micGranted) {
+                        cameraPermissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+                    }
+                }
                 // After first page load, replace the splash window background with a
                 // plain color so the Frianzo logo never flashes when returning from
                 // external activities (e.g. gallery picker).
                 window.setBackgroundDrawableResource(
                     if (isDarkTheme()) R.color.frianzo_dark_bg else android.R.color.white
                 )
+            }
+
+            // Auto-retry on network errors (fixes net::ERR_FAILED permanent)
+            private var retryCount = 0
+            private var lastFailedUrl: String? = null
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+                super.onReceivedError(view, request, error)
+                if (request.isForMainFrame) {
+                    val url = request.url.toString()
+                    val errorCode = error.errorCode
+                    // Retry on network errors: ERR_FAILED, timeouts, connection issues
+                    if (errorCode == android.webkit.WebViewClient.ERROR_CONNECT ||
+                        errorCode == android.webkit.WebViewClient.ERROR_TIMEOUT ||
+                        errorCode == android.webkit.WebViewClient.ERROR_HOST_LOOKUP ||
+                        errorCode == -2) { // -2 = net::ERR_FAILED
+                        if (url == lastFailedUrl) retryCount++ else { retryCount = 1; lastFailedUrl = url }
+                        if (retryCount <= 3) {
+                            val delay = when (retryCount) { 1 -> 2000L; 2 -> 5000L; else -> 10000L }
+                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                view.loadUrl(url)
+                            }, delay)
+                            return // Don't show error page, retrying
+                        }
+                    }
+                    retryCount = 0
+                    lastFailedUrl = null
+                }
             }
 
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
