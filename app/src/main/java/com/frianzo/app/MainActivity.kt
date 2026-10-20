@@ -27,7 +27,11 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
+import android.widget.ProgressBar
 import android.widget.Toast
+import com.otaliastudios.transcoder.Transcoder
+import com.otaliastudios.transcoder.TranscoderListener
+import com.otaliastudios.transcoder.strategy.DefaultVideoStrategy
 import android.view.KeyEvent
 import android.view.View
 import android.animation.ObjectAnimator
@@ -243,6 +247,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+
+    /** Picked videos at or above this size are compressed on-device before upload. */
+    private val videoCompressMinBytes = 8L * 1024 * 1024
     private var cameraCaptureUri: Uri? = null
 
     /** A file staged from an incoming Android share-sheet intent, served to the
@@ -252,18 +259,113 @@ class MainActivity : AppCompatActivity() {
     private val fileChooserLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val capturedUri = cameraCaptureUri
         cameraCaptureUri = null
-        if (capturedUri != null) {
+        val uris = if (capturedUri != null) {
             // We launched a direct camera-capture intent (not the standard
             // document/gallery chooser), so the result doesn't come back in
             // the format FileChooserParams.parseResult() expects. The file
             // was written straight to the Uri we handed the camera app.
-            val uris = if (result.resultCode == RESULT_OK) arrayOf(capturedUri) else null
-            fileChooserCallback?.onReceiveValue(uris)
+            if (result.resultCode == RESULT_OK) arrayOf(capturedUri) else null
         } else {
-            val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
-            fileChooserCallback?.onReceiveValue(uris)
+            WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
         }
+        deliverChooserResult(uris)
+    }
+
+    /**
+     * Hands a file-chooser result to the web page. A single picked video of
+     * 8 MB or more is first compressed on the device (720p box) so uploads
+     * cost far less data; the server still compresses again as a safety net.
+     * Fail-safe: ANY problem (unknown size/type, transcode error, user
+     * cancel) delivers the ORIGINAL selection untouched.
+     */
+    private fun deliverChooserResult(uris: Array<Uri>?) {
+        val callback = fileChooserCallback
         fileChooserCallback = null
+        if (callback == null) return
+        if (uris == null || uris.size != 1) {
+            callback.onReceiveValue(uris)
+            return
+        }
+        val uri = uris[0]
+        val mime = try { contentResolver.getType(uri) } catch (e: Exception) { null }
+        if (mime == null || !mime.startsWith("video/")) {
+            callback.onReceiveValue(uris)
+            return
+        }
+        val size = queryUriSize(uri)
+        if (size < videoCompressMinBytes) {
+            callback.onReceiveValue(uris)
+            return
+        }
+        compressVideoThenDeliver(uri, size, callback)
+    }
+
+    private fun queryUriSize(uri: Uri): Long {
+        return try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else -1L
+            } ?: -1L
+        } catch (e: Exception) {
+            -1L
+        }
+    }
+
+    private fun compressVideoThenDeliver(source: Uri, sourceSize: Long, callback: ValueCallback<Array<Uri>>) {
+        val outFile = File(cacheDir, "compressed_${System.currentTimeMillis()}.mp4")
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            setPadding(56, 40, 56, 8)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Compressing video\u2026")
+            .setView(bar)
+            .setCancelable(true)
+            .create()
+        var delivered = false
+        fun deliver(result: Array<Uri>?) {
+            if (delivered) return
+            delivered = true
+            try { if (dialog.isShowing) dialog.dismiss() } catch (e: Exception) { }
+            callback.onReceiveValue(result)
+        }
+        val future = Transcoder.into(outFile.absolutePath)
+            .addDataSource(this, source)
+            .setVideoTrackStrategy(DefaultVideoStrategy.atMost(720, 1280).build())
+            .setListener(object : TranscoderListener {
+                override fun onTranscodeProgress(progress: Double) {
+                    runOnUiThread { bar.progress = (progress * 100).toInt() }
+                }
+                override fun onTranscodeCompleted(successCode: Int) {
+                    runOnUiThread {
+                        val smaller = outFile.exists() && outFile.length() > 0 && outFile.length() < sourceSize
+                        if (smaller) {
+                            try {
+                                val outUri = FileProvider.getUriForFile(this@MainActivity, "$packageName.fileprovider", outFile)
+                                deliver(arrayOf(outUri))
+                            } catch (e: Exception) {
+                                deliver(arrayOf(source))
+                            }
+                        } else {
+                            deliver(arrayOf(source))
+                        }
+                    }
+                }
+                override fun onTranscodeCanceled() {
+                    runOnUiThread { deliver(arrayOf(source)) }
+                }
+                override fun onTranscodeFailed(exception: Throwable) {
+                    Log.w(TAG, "Video compression failed; using original", exception)
+                    runOnUiThread { deliver(arrayOf(source)) }
+                }
+            })
+            .transcode()
+        dialog.setOnCancelListener {
+            try { future.cancel(true) } catch (e: Exception) { }
+            deliver(arrayOf(source))
+        }
+        if (!isFinishing && !isDestroyed) {
+            try { dialog.show() } catch (e: Exception) { }
+        }
     }
 
     companion object {

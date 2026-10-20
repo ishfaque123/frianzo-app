@@ -70,4 +70,5 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
     implementation("com.google.firebase:firebase-messaging")
     implementation("androidx.biometric:biometric:1.1.0")
+    implementation("io.deepmedia.community:transcoder-android:0.11.2")
 }
