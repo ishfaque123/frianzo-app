@@ -909,16 +909,27 @@ class MainActivity : AppCompatActivity() {
         // Compose takes a single attachment; use the first shared item.
         // (A shared video is routed to the reels flow by the compose page.)
         // A shared caption (e.g. WhatsApp) is prefilled as the post text.
-        val staged = uris.firstOrNull()?.let { stageSharedUri(it) }
-        if (staged == null) {
+        // ANR FIX (2026-10-20): staging copies the whole file on the calling
+        // thread — from onCreate/onNewIntent that is the MAIN thread, so a
+        // large shared video freezes the app ("Input dispatching timed out"
+        // ANR in Play Console). Stage on IO, then navigate back on Main.
+        val first = uris.firstOrNull()
+        if (first == null) {
             webView.loadUrl("$SITE_URL/compose")
             return
         }
-        val (token, share) = staged
         val caption = intent.getStringExtra(Intent.EXTRA_TEXT)?.takeIf { it.isNotBlank() }
-        var url = "$SITE_URL/compose?share=$token&name=${Uri.encode(share.name)}"
-        if (caption != null) url += "&shared_text=${Uri.encode(caption)}"
-        webView.loadUrl(url)
+        lifecycleScope.launch {
+            val staged = withContext(Dispatchers.IO) { stageSharedUri(first) }
+            if (staged == null) {
+                webView.loadUrl("$SITE_URL/compose")
+                return@launch
+            }
+            val (token, share) = staged
+            var url = "$SITE_URL/compose?share=$token&name=${Uri.encode(share.name)}"
+            if (caption != null) url += "&shared_text=${Uri.encode(caption)}"
+            webView.loadUrl(url)
+        }
     }
 
     private fun stageSharedUri(uri: Uri): Pair<String, StagedShare>? {
