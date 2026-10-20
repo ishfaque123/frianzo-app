@@ -1196,12 +1196,24 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 val cause = generateDiagnosticMessage(e)
                 Log.e(TAG, "Native Google sign-in failed: $cause", e)
-                Toast.makeText(this@MainActivity, cause, Toast.LENGTH_LONG).show()
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Google Login Failed")
-                    .setMessage(cause)
-                    .setPositiveButton("OK", null)
-                    .show()
+                // BadTokenException guard (Play Console crash, v18): if the user
+                // backgrounded/closed the app while sign-in was in flight, the
+                // activity is finishing/destroyed by the time we get here and
+                // showing a dialog crashes the app. Only show UI when alive.
+                if (!isFinishing && !isDestroyed) {
+                    try {
+                        Toast.makeText(this@MainActivity, cause, Toast.LENGTH_LONG).show()
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Google Login Failed")
+                            .setMessage(cause)
+                            .setPositiveButton("OK", null)
+                            .show()
+                    } catch (be: android.view.WindowManager.BadTokenException) {
+                        Log.w(TAG, "Login-failed dialog skipped: activity window gone", be)
+                    }
+                } else {
+                    Log.w(TAG, "Login-failed UI skipped: activity finishing/destroyed")
+                }
             }
         }
     }
