@@ -575,25 +575,11 @@ class MainActivity : AppCompatActivity() {
                     ) {
                         if (url == lastFailedUrl) retryCount++ else { retryCount = 1; lastFailedUrl = url }
                         if (retryCount <= 3) {
-                            // OFFLINE-SCREEN FIX (user-approved 2026-10-20): show our
-                            // FB-style "No internet connection" screen IMMEDIATELY on
-                            // the first failure. The old flow left WebView's dead
-                            // net::ERR_FAILED page on screen for the whole retry
-                            // sequence (~17s) and only showed our screen at the end.
-                            // Retries keep running in the background; when one
-                            // succeeds, onPageFinished clears the error state and
-                            // the real page replaces this screen.
-                            if (!loadErrorShowing) {
-                                swipeRefresh.isRefreshing = false
-                                this@MainActivity.showLoadErrorPage(view, url)
-                            }
                             val delay = when (retryCount) { 1 -> 2000L; 2 -> 5000L; else -> 10000L }
                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                if (!isFinishing && !isDestroyed) {
-                                    try { view.loadUrl(url) } catch (e: Exception) { }
-                                }
+                                view.loadUrl(url)
                             }, delay)
-                            return // Error screen already showing, retrying in background
+                            return // Don't show error page, retrying
                         }
                     }
                     retryCount = 0
@@ -602,9 +588,7 @@ class MainActivity : AppCompatActivity() {
                     // with a Retry button instead of WebView's dead net::ERR_*
                     // page, and stop the refresh spinner so it never freezes.
                     swipeRefresh.isRefreshing = false
-                    if (!loadErrorShowing) {
-                        this@MainActivity.showLoadErrorPage(view, url)
-                    }
+                    this@MainActivity.showLoadErrorPage(view, url)
                 }
             }
 
