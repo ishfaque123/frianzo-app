@@ -11,6 +11,7 @@ import android.os.Environment
 import android.provider.Settings
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.MutableContextWrapper
 import android.content.res.Configuration
@@ -20,6 +21,8 @@ import android.webkit.MimeTypeMap
 import android.webkit.WebResourceResponse
 import androidx.core.content.FileProvider
 import java.io.File
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -77,6 +80,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadingOverlay: View
     private val dotAnimators = mutableListOf<ObjectAnimator>()
     private var loadingOverlayHidden = false
+    // FB-style offline recovery: while our own load-error screen is up we
+    // remember the failed URL so the app can reload it by itself the moment
+    // the network comes back (and pull-to-refresh retries the same page).
+    @Volatile private var loadErrorShowing = false
+    @Volatile private var loadErrorUrl: String? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var pushToken: String = ""
     @Volatile private var installReferrer: String? = null
     @Volatile private var referralClaimed: Boolean = false
@@ -260,6 +269,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "FrianzoGoogleAuth"
         private const val SITE_URL = "https://frianzo.online"
+        private const val LOAD_ERROR_MARKER = "__frianzo_load_error"
         private const val SITE_HOST = "frianzo.online"
         private const val API_URL = "https://api.frianzo.online"
         private const val API_HOST = "api.frianzo.online"
@@ -314,6 +324,7 @@ class MainActivity : AppCompatActivity() {
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
         loadInstallReferrer()
         setupPush()
+        registerNetworkRecoveryCallback()
 
         webView.settings.apply {
             javaScriptEnabled = true
@@ -509,6 +520,15 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
+                // A real content page finished loading: the load-error state
+                // is over. The error page itself reports the site root URL
+                // (its base URL), so the root is not treated as recovery.
+                if (loadErrorShowing && !url.isNullOrEmpty() &&
+                    url != SITE_URL && url != "$SITE_URL/" && !url.contains(LOAD_ERROR_MARKER)
+                ) {
+                    loadErrorShowing = false
+                    loadErrorUrl = null
+                }
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
                 hideLoadingOverlay()
@@ -619,7 +639,18 @@ class MainActivity : AppCompatActivity() {
             swipeRefresh.setProgressViewOffset(false, startOffsetPx, endOffsetPx)
         }
 
-        swipeRefresh.setOnRefreshListener { webView.reload() }
+        swipeRefresh.setOnRefreshListener {
+            // While the load-error screen is up, pull-to-refresh must retry
+            // the FAILED page — reloading would just reload the error page.
+            val failed = loadErrorUrl
+            if (loadErrorShowing && !failed.isNullOrBlank()) {
+                loadErrorShowing = false
+                loadErrorUrl = null
+                webView.loadUrl(failed)
+            } else {
+                webView.reload()
+            }
+        }
 
         // Check for app updates in background
         checkForAppUpdate()
@@ -647,6 +678,57 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * FB-style reconnect: when the network comes back while our load-error
+     * screen is showing, reload the failed page automatically — the user
+     * does not have to tap Retry. Registered once for the activity.
+     */
+    private fun registerNetworkRecoveryCallback() {
+        if (networkCallback != null) return
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    runOnUiThread {
+                        val target = loadErrorUrl
+                        if (loadErrorShowing && !target.isNullOrBlank()) {
+                            // Only auto-reload while the error screen is still
+                            // up (it reports the site root as its URL). If the
+                            // user already navigated to a real page, skip.
+                            val current = try { webView.url } catch (e: Exception) { null }
+                            val stillOnError = current == null || current == SITE_URL ||
+                                current == "$SITE_URL/" || current.contains(LOAD_ERROR_MARKER)
+                            if (stillOnError) {
+                                loadErrorShowing = false
+                                loadErrorUrl = null
+                                Log.i(TAG, "Network is back - auto-reloading failed page")
+                                try { webView.loadUrl(target) } catch (e: Exception) {
+                                    Log.e(TAG, "Auto-reload after reconnect failed", e)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not register network recovery callback", e)
+        }
+    }
+
+    override fun onDestroy() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            val callback = networkCallback
+            if (cm != null && callback != null) cm.unregisterNetworkCallback(callback)
+        } catch (e: Exception) {
+            // Never let cleanup crash the activity teardown.
+        }
+        networkCallback = null
+        super.onDestroy()
+    }
+
+    /**
      * FB-style load-failure screen: our own dark page with a Retry button,
      * shown when a page load fails after auto-retries are exhausted — instead
      * of WebView's dead net::ERR_* page (which made the app look frozen).
@@ -654,6 +736,8 @@ class MainActivity : AppCompatActivity() {
      * links are allowed through handleUrl).
      */
     private fun showLoadErrorPage(view: WebView, failedUrl: String) {
+        loadErrorShowing = true
+        loadErrorUrl = failedUrl
         val retryUrl = failedUrl
             .replace("&", "&amp;")
             .replace("\"", "&quot;")
@@ -667,25 +751,28 @@ class MainActivity : AppCompatActivity() {
               body { margin:0; font-family: sans-serif; background:#0f172a; color:#e2e8f0;
                      display:flex; align-items:center; justify-content:center;
                      min-height:100vh; text-align:center; padding:24px; box-sizing:border-box; }
-              .logo { font-size:30px; font-weight:800; color:#3b82f6; letter-spacing:-0.5px; }
-              h1 { font-size:20px; margin:18px 0 8px; font-weight:700; }
-              p { color:#94a3b8; font-size:14px; line-height:1.55; margin:0 0 26px; }
+              .logo { font-size:24px; font-weight:800; color:#3b82f6; letter-spacing:-0.5px; margin-bottom:28px; }
+              h1 { font-size:20px; margin:20px 0 8px; font-weight:700; }
+              p { color:#94a3b8; font-size:14px; line-height:1.55; margin:0 0 10px; }
+              p.small { font-size:12.5px; color:#64748b; margin:0 0 28px; }
               a.btn { display:inline-block; background:#2563eb; color:#ffffff; text-decoration:none;
-                      padding:12px 34px; border-radius:999px; font-weight:600; font-size:15px; }
+                      padding:12px 38px; border-radius:999px; font-weight:600; font-size:15px; }
             </style>
             </head>
             <body>
               <div>
                 <div class="logo">Frianzo</div>
-                <h1>Connection problem</h1>
-                <p>This page could not be loaded. Your internet seems slow or offline.<br>Check your connection and try again.</p>
+                <svg width="76" height="76" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M22.61 16.95A5 5 0 0 0 18 10h-1.26a8 8 0 0 0-7.05-6M5 5a8 8 0 0 0 4 15h9a5 5 0 0 0 1.7-.3"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                <h1>No internet connection</h1>
+                <p>Make sure Wi-Fi or mobile data is turned on,<br>then try again.</p>
+                <p class="small">Frianzo will reconnect on its own when your internet returns.</p>
                 <a class="btn" href="$retryUrl">Retry</a>
               </div>
             </body>
             </html>
         """.trimIndent()
         try {
-            view.loadDataWithBaseURL(SITE_URL, html, "text/html", "UTF-8", null)
+            view.loadDataWithBaseURL("$SITE_URL/#$LOAD_ERROR_MARKER", html, "text/html", "UTF-8", null)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to show load-error page", e)
         }
