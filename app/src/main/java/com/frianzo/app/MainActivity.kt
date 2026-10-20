@@ -533,7 +533,8 @@ class MainActivity : AppCompatActivity() {
                     if (errorCode == android.webkit.WebViewClient.ERROR_CONNECT ||
                         errorCode == android.webkit.WebViewClient.ERROR_TIMEOUT ||
                         errorCode == android.webkit.WebViewClient.ERROR_HOST_LOOKUP ||
-                        errorCode == -2) { // -2 = net::ERR_FAILED
+                        errorCode == android.webkit.WebViewClient.ERROR_UNKNOWN
+                    ) {
                         if (url == lastFailedUrl) retryCount++ else { retryCount = 1; lastFailedUrl = url }
                         if (retryCount <= 3) {
                             val delay = when (retryCount) { 1 -> 2000L; 2 -> 5000L; else -> 10000L }
@@ -545,6 +546,11 @@ class MainActivity : AppCompatActivity() {
                     }
                     retryCount = 0
                     lastFailedUrl = null
+                    // Retries exhausted: FB-style recovery — our own error screen
+                    // with a Retry button instead of WebView's dead net::ERR_*
+                    // page, and stop the refresh spinner so it never freezes.
+                    swipeRefresh.isRefreshing = false
+                    this@MainActivity.showLoadErrorPage(view, url)
                 }
             }
 
@@ -619,6 +625,51 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * FB-style load-failure screen: our own dark page with a Retry button,
+     * shown when a page load fails after auto-retries are exhausted — instead
+     * of WebView's dead net::ERR_* page (which made the app look frozen).
+     * The Retry link reloads the failed URL inside the WebView (same-host
+     * links are allowed through handleUrl).
+     */
+    private fun showLoadErrorPage(view: WebView, failedUrl: String) {
+        val retryUrl = failedUrl
+            .replace("&", "&amp;")
+            .replace("\"", "&quot;")
+            .replace("<", "&lt;")
+        val html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+              body { margin:0; font-family: sans-serif; background:#0f172a; color:#e2e8f0;
+                     display:flex; align-items:center; justify-content:center;
+                     min-height:100vh; text-align:center; padding:24px; box-sizing:border-box; }
+              .logo { font-size:30px; font-weight:800; color:#3b82f6; letter-spacing:-0.5px; }
+              h1 { font-size:20px; margin:18px 0 8px; font-weight:700; }
+              p { color:#94a3b8; font-size:14px; line-height:1.55; margin:0 0 26px; }
+              a.btn { display:inline-block; background:#2563eb; color:#ffffff; text-decoration:none;
+                      padding:12px 34px; border-radius:999px; font-weight:600; font-size:15px; }
+            </style>
+            </head>
+            <body>
+              <div>
+                <div class="logo">Frianzo</div>
+                <h1>Connection problem</h1>
+                <p>This page could not be loaded. Your internet seems slow or offline.<br>Check your connection and try again.</p>
+                <a class="btn" href="$retryUrl">Retry</a>
+              </div>
+            </body>
+            </html>
+        """.trimIndent()
+        try {
+            view.loadDataWithBaseURL(SITE_URL, html, "text/html", "UTF-8", null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show load-error page", e)
         }
     }
 
