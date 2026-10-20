@@ -89,6 +89,9 @@ class MainActivity : AppCompatActivity() {
     // the network comes back (and pull-to-refresh retries the same page).
     @Volatile private var loadErrorShowing = false
     @Volatile private var loadErrorUrl: String? = null
+    // Guard against the renderer-death reload loop: at most 2 reloads a minute.
+    @Volatile private var renderGoneReloadCount = 0
+    @Volatile private var renderGoneWindowStartMs = 0L
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     @Volatile private var pushToken: String = ""
     @Volatile private var installReferrer: String? = null
@@ -695,13 +698,26 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
-                // WebView renderer crashed - reload instead of crashing app
-                // This fixes the open/close crash loop
-                Log.e(TAG, "WebView renderer crashed, reloading")
+                // The page's renderer died. Reloading it endlessly makes the
+                // screen flicker blank (seen in the wild: ~15 blank episodes
+                // in 10 seconds), so allow at most 2 reloads per minute;
+                // after that settle on the load-error screen (Retry) instead
+                // of looping.
+                Log.e(TAG, "WebView renderer gone (crash=" + detail.didCrash() + ")")
+                val now = System.currentTimeMillis()
+                if (now - renderGoneWindowStartMs > 60_000) {
+                    renderGoneWindowStartMs = now
+                    renderGoneReloadCount = 0
+                }
+                renderGoneReloadCount++
                 try {
-                    view.loadUrl(SITE_URL)
+                    if (renderGoneReloadCount <= 2) {
+                        view.loadUrl(view.url ?: SITE_URL)
+                    } else {
+                        this@MainActivity.showLoadErrorPage(view, view.url ?: SITE_URL)
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to reload WebView", e)
+                    Log.e(TAG, "Failed to recover WebView", e)
                 }
                 return true
             }
