@@ -26,6 +26,9 @@ import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import android.view.KeyEvent
+import android.view.View
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
@@ -71,6 +74,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var credentialManager: CredentialManager
+    private lateinit var loadingOverlay: View
+    private val dotAnimators = mutableListOf<ObjectAnimator>()
+    private var loadingOverlayHidden = false
     @Volatile private var pushToken: String = ""
     @Volatile private var installReferrer: String? = null
     @Volatile private var referralClaimed: Boolean = false
@@ -293,6 +299,17 @@ class MainActivity : AppCompatActivity() {
             )
         )
         swipeRefresh = findViewById(R.id.swipe_refresh)
+        loadingOverlay = findViewById(R.id.loading_overlay)
+        loadingOverlay.setBackgroundColor(
+            ContextCompat.getColor(
+                this,
+                if (darkTheme) R.color.frianzo_dark_bg else android.R.color.white
+            )
+        )
+        startLoadingDots()
+        // Safety: never leave the loading overlay covering the app if the
+        // first page load somehow never reports finished.
+        loadingOverlay.postDelayed({ hideLoadingOverlay() }, 15000)
         credentialManager = CredentialManager.create(this)
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
         loadInstallReferrer()
@@ -494,6 +511,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
+                hideLoadingOverlay()
                 tryClaimReferral()
                 // Proactively request camera permission on camera page so that
                 // when the website calls getUserMedia, the permission is already
@@ -1038,6 +1056,34 @@ class MainActivity : AppCompatActivity() {
      * (nothing reported yet) falls back to the system night mode, mirroring
      * the web ThemeProvider's 'system' behavior.
      */
+    /** Start the FB-style pulsing dots on the first-load overlay. */
+    private fun startLoadingDots() {
+        val dotIds = listOf(R.id.dot1, R.id.dot2, R.id.dot3, R.id.dot4, R.id.dot5, R.id.dot6)
+        dotIds.forEachIndexed { i, id ->
+            val dot = findViewById<View>(id)
+            val anim = ObjectAnimator.ofFloat(dot, View.ALPHA, 0.25f, 1f, 0.25f).apply {
+                duration = 720
+                startDelay = (i * 120).toLong()
+                repeatCount = ValueAnimator.INFINITE
+            }
+            dotAnimators.add(anim)
+            anim.start()
+        }
+    }
+
+    /** Fade the first-load overlay out (idempotent: only the first call acts). */
+    private fun hideLoadingOverlay() {
+        if (loadingOverlayHidden) return
+        loadingOverlayHidden = true
+        dotAnimators.forEach { it.cancel() }
+        dotAnimators.clear()
+        loadingOverlay.animate()
+            .alpha(0f)
+            .setDuration(250)
+            .withEndAction { loadingOverlay.visibility = View.GONE }
+            .start()
+    }
+
     private fun isDarkTheme(): Boolean {
         when (getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_APP_THEME, null)) {
             "dark" -> return true
