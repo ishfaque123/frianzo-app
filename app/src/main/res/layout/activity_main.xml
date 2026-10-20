@@ -1,13 +1,96 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/swipe_refresh"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <WebView
-        android:id="@+id/webview"
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipe_refresh"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent">
 
-</androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+        <WebView
+            android:id="@+id/webview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+    <!-- First-load overlay (user-ordered 2026-10-20): keeps the branded
+         splash (logo + FB-style pulsing dots) on screen until the first page
+         paints, instead of the blank black screen seen between the logo
+         splash and the feed. Hidden by MainActivity on first onPageFinished,
+         with a 15s safety timeout so it can never get stuck. -->
+    <LinearLayout
+        android:id="@+id/loading_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/frianzo_dark_bg"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <ImageView
+            android:layout_width="96dp"
+            android:layout_height="96dp"
+            android:contentDescription="Frianzo"
+            android:src="@mipmap/ic_launcher" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <View
+                android:id="@+id/dot1"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
+
+            <View
+                android:id="@+id/dot2"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
+
+            <View
+                android:id="@+id/dot3"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
+
+            <View
+                android:id="@+id/dot4"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
+
+            <View
+                android:id="@+id/dot5"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
+
+            <View
+                android:id="@+id/dot6"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</FrameLayout>
