@@ -676,37 +676,19 @@ class MainActivity : AppCompatActivity() {
                         errorCode == android.webkit.WebViewClient.ERROR_UNKNOWN
                     ) {
                         if (url == lastFailedUrl) retryCount++ else { retryCount = 1; lastFailedUrl = url }
-                        // Show our own load-error screen (Retry) right away
-                        // instead of leaving WebView's raw net::ERR_* page on
-                        // screen during the retries below. The retries keep
-                        // running behind it: if the internet returns, a retry
-                        // loads the real page and the error screen is gone
-                        // (onPageFinished clears the error state).
-                        swipeRefresh.isRefreshing = false
-                        this@MainActivity.showLoadErrorPage(view, url)
                         if (retryCount <= 3) {
                             val delay = when (retryCount) { 1 -> 2000L; 2 -> 5000L; else -> 10000L }
                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                // Retry only while our error screen is still
-                                // up for this same page; if the user already
-                                // moved on to a real page, do not pull them back.
-                                if (loadErrorUrl == url) {
-                                    try { view.loadUrl(url) } catch (e: Exception) {
-                                        Log.e(TAG, "Auto-retry failed", e)
-                                    }
-                                }
+                                view.loadUrl(url)
                             }, delay)
-                        } else {
-                            retryCount = 0
-                            lastFailedUrl = null
+                            return // Don't show error page, retrying
                         }
-                        return
                     }
                     retryCount = 0
                     lastFailedUrl = null
-                    // Non-network load failure: our own error screen with a
-                    // Retry button instead of WebView's dead net::ERR_* page,
-                    // and stop the refresh spinner so it never freezes.
+                    // Retries exhausted: FB-style recovery — our own error screen
+                    // with a Retry button instead of WebView's dead net::ERR_*
+                    // page, and stop the refresh spinner so it never freezes.
                     swipeRefresh.isRefreshing = false
                     this@MainActivity.showLoadErrorPage(view, url)
                 }
