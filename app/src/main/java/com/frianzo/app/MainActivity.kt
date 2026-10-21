@@ -1491,18 +1491,27 @@ class MainActivity : AppCompatActivity() {
                 // Silently return to the login screen (fix 2026-10-17).
                 Log.i(TAG, "Google sign-in canceled by user; no error shown")
             } catch (e: Exception) {
+                // Full technical detail stays in the log for developers only;
+                // the user sees a clean, professional message (2026-10-21).
                 val cause = generateDiagnosticMessage(e)
                 Log.e(TAG, "Native Google sign-in failed: $cause", e)
+                val isNotActive = cause.contains("ACCOUNT_NOT_ACTIVE")
+                val dialogTitle = if (isNotActive) "Account Suspended" else "Login Failed"
+                val dialogMessage = if (isNotActive) {
+                    "Your account has been suspended, so you can't log in right now.\n\n" +
+                        "If you believe this is a mistake, please contact us at support@frianzo.online."
+                } else {
+                    "Something went wrong while signing in. Please check your internet connection and try again."
+                }
                 // BadTokenException guard (Play Console crash, v18): if the user
                 // backgrounded/closed the app while sign-in was in flight, the
                 // activity is finishing/destroyed by the time we get here and
                 // showing a dialog crashes the app. Only show UI when alive.
                 if (!isFinishing && !isDestroyed) {
                     try {
-                        Toast.makeText(this@MainActivity, cause, Toast.LENGTH_LONG).show()
                         AlertDialog.Builder(this@MainActivity)
-                            .setTitle("Google Login Failed")
-                            .setMessage(cause)
+                            .setTitle(dialogTitle)
+                            .setMessage(dialogMessage)
                             .setPositiveButton("OK", null)
                             .show()
                     } catch (be: android.view.WindowManager.BadTokenException) {
