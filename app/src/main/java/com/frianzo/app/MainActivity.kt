@@ -233,9 +233,17 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    // Cancel/error: never open the app behind the lock — close instead
+                    // Cancel/error: wipe ONLY the login session (device cookie stays),
+                    // then open password login — it cannot auto-login now
                     pendingStartUrl = null
-                    finish()
+                    val cookieManager = CookieManager.getInstance()
+                    val expire = "Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure; SameSite=None; Domain=.frianzo.online"
+                    cookieManager.setCookie(API_URL, "vynzo_auth_token=; $expire")
+                    cookieManager.setCookie(API_URL, "vynzo_token=; $expire")
+                    cookieManager.setCookie(SITE_URL, "vynzo_auth_token=; $expire")
+                    cookieManager.setCookie(SITE_URL, "vynzo_token=; $expire")
+                    cookieManager.flush()
+                    webView.loadUrl("$SITE_URL/login")
                 }
             })
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
