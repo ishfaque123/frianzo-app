@@ -1134,7 +1134,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun notificationTargetUrl(intent: Intent?): String? {
-        val path = intent?.getStringExtra("url") ?: return null
+        val path = intent?.getStringExtra("fcm_url") ?: intent?.getStringExtra("url") ?: return null
         return if (path.startsWith("/") && !path.startsWith("//")) "$SITE_URL$path" else null
     }
 
