@@ -1339,15 +1339,17 @@ class MainActivity : AppCompatActivity() {
         val isFrianzoHost = uri.scheme.equals("https", ignoreCase = true) &&
             (uri.host.equals(SITE_HOST, ignoreCase = true) ||
                 uri.host.equals("www.$SITE_HOST", ignoreCase = true))
-        val isReelsSection = isFrianzoHost &&
-            (uri.path == "/reels" || uri.path?.startsWith("/reels/") == true)
+        val isNoRefreshSection = isFrianzoHost &&
+            (uri.path == "/reels" || uri.path?.startsWith("/reels/") == true ||
+             uri.path == "/messages" || uri.path?.startsWith("/messages/") == true)
 
-        // Reel feed uses vertical swipe navigation. Disable pull-to-refresh only
-        // while the WebView is inside the reels section so a downward reel swipe
-        // can never trigger SwipeRefreshLayout.reload(). Other app pages keep
-        // their existing pull-to-refresh behavior.
-        swipeRefresh.isEnabled = !isReelsSection
-        if (isReelsSection) swipeRefresh.isRefreshing = false
+        // Reel feed uses vertical swipe navigation, and chat uses its own scroll
+        // to older messages. Disable pull-to-refresh only while the WebView is
+        // inside the reels or messages sections so a downward swipe can never
+        // trigger SwipeRefreshLayout.reload(). Other app pages keep their
+        // existing pull-to-refresh behavior.
+        swipeRefresh.isEnabled = !isNoRefreshSection
+        if (isNoRefreshSection) swipeRefresh.isRefreshing = false
     }
 
     private fun handleUrl(uri: Uri): Boolean {
