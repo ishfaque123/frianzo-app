@@ -392,7 +392,6 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "frianzo_prefs"
         private const val KEY_APP_THEME = "app_theme"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
-        private const val KEY_REFERRAL_CLAIMED = "referral_claimed"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -411,11 +410,6 @@ class MainActivity : AppCompatActivity() {
         }
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
-        // Restore the referral marker: without this, every cold start re-posts
-        // the claim (the server rejects it, but it is a wasted request).
-        referralClaimed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .getBoolean(KEY_REFERRAL_CLAIMED, false)
 
         webView = findViewById(R.id.webview)
         webView.setBackgroundColor(
@@ -1074,15 +1068,6 @@ class MainActivity : AppCompatActivity() {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    // Persist the marker: the in-memory flag alone resets on every cold start,
-    // re-posting an already-settled claim. Only ever set on accepted or
-    // already-referred responses — never on network failure, so retries keep working.
-    private fun markReferralClaimed() {
-        referralClaimed = true
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-            .putBoolean(KEY_REFERRAL_CLAIMED, true).apply()
-    }
-
     private fun tryClaimReferral() {
         if (referralClaimed) return
         val referrer = installReferrer?.trim().orEmpty()
@@ -1096,7 +1081,7 @@ class MainActivity : AppCompatActivity() {
                     claimReferralOnBackend(authToken, referrer, getReferralDeviceFingerprint())
                 }
                 if (accepted) {
-                    markReferralClaimed()
+                    referralClaimed = true
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Referral claim failed; will retry on next page", e)
@@ -1135,7 +1120,7 @@ class MainActivity : AppCompatActivity() {
             if (!accepted) {
                 val reason = data.optString("reason")
                 if (reason == "ACCOUNT_ALREADY_REFERRED" || reason == "DEVICE_ALREADY_REFERRED" || reason == "REFERRAL_ALREADY_CLAIMED") {
-                    markReferralClaimed()
+                    referralClaimed = true
                 }
             }
             accepted || referralClaimed
@@ -1354,17 +1339,15 @@ class MainActivity : AppCompatActivity() {
         val isFrianzoHost = uri.scheme.equals("https", ignoreCase = true) &&
             (uri.host.equals(SITE_HOST, ignoreCase = true) ||
                 uri.host.equals("www.$SITE_HOST", ignoreCase = true))
-        val isNoRefreshSection = isFrianzoHost &&
-            (uri.path == "/reels" || uri.path?.startsWith("/reels/") == true ||
-             uri.path == "/messages" || uri.path?.startsWith("/messages/") == true)
+        val isReelsSection = isFrianzoHost &&
+            (uri.path == "/reels" || uri.path?.startsWith("/reels/") == true)
 
-        // Reel feed uses vertical swipe navigation, and chat uses its own scroll
-        // to older messages. Disable pull-to-refresh only while the WebView is
-        // inside the reels or messages sections so a downward swipe can never
-        // trigger SwipeRefreshLayout.reload(). Other app pages keep their
-        // existing pull-to-refresh behavior.
-        swipeRefresh.isEnabled = !isNoRefreshSection
-        if (isNoRefreshSection) swipeRefresh.isRefreshing = false
+        // Reel feed uses vertical swipe navigation. Disable pull-to-refresh only
+        // while the WebView is inside the reels section so a downward reel swipe
+        // can never trigger SwipeRefreshLayout.reload(). Other app pages keep
+        // their existing pull-to-refresh behavior.
+        swipeRefresh.isEnabled = !isReelsSection
+        if (isReelsSection) swipeRefresh.isRefreshing = false
     }
 
     private fun handleUrl(uri: Uri): Boolean {
