@@ -672,6 +672,11 @@ class MainActivity : AppCompatActivity() {
             private var retryCount = 0
             private var lastFailedUrl: String? = null
 
+            // Renderer-crash loop guard: same idea as the network retry limit
+            // above — a few reloads are fine, endless crash -> reload is not.
+            private var rendererCrashCount = 0
+            private var lastRendererCrashMs = 0L
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                 super.onReceivedError(view, request, error)
                 if (request.isForMainFrame) {
@@ -703,8 +708,21 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
-                // WebView renderer crashed - reload instead of crashing app
-                // This fixes the open/close crash loop
+                // WebView renderer crashed - reload a few times, then stop:
+                // without a limit, a page that crashes on load loops forever
+                // (crash -> reload -> crash). After 3 crashes within 60s,
+                // show the error screen and let the user retry manually.
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastRendererCrashMs > 60_000L) rendererCrashCount = 0
+                lastRendererCrashMs = now
+                rendererCrashCount++
+                if (rendererCrashCount > 3) {
+                    rendererCrashCount = 0
+                    Log.e(TAG, "WebView renderer crashed repeatedly, showing error page")
+                    swipeRefresh.isRefreshing = false
+                    this@MainActivity.showLoadErrorPage(view, SITE_URL)
+                    return true
+                }
                 Log.e(TAG, "WebView renderer crashed, reloading")
                 try {
                     view.loadUrl(SITE_URL)
