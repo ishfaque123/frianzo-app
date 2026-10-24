@@ -233,9 +233,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    // On cancel/error, load normally so user can login manually
-                    pendingStartUrl?.let { webView.loadUrl(it) }
+                    // Cancel/error: never open the app behind the lock — close instead
                     pendingStartUrl = null
+                    finish()
                 }
             })
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
