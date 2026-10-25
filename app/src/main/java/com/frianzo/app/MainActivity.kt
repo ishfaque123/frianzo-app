@@ -1646,7 +1646,7 @@ class MainActivity : AppCompatActivity() {
         cookieManager.setAcceptCookie(true)
         cookieManager.setAcceptThirdPartyCookies(webView, true)
 
-        val opts = "Path=/; Secure; SameSite=None; Domain=.frianzo.online"
+        val opts = "Path=/; Secure; HttpOnly; SameSite=None; Domain=.frianzo.online"
 
         cookieManager.setCookie(API_URL, "vynzo_auth_token=$token; $opts")
         cookieManager.setCookie(API_URL, "vynzo_token=$token; $opts")
