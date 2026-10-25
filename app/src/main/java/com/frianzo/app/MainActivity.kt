@@ -233,9 +233,17 @@ class MainActivity : AppCompatActivity() {
                 }
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    // On cancel/error, load normally so user can login manually
-                    pendingStartUrl?.let { webView.loadUrl(it) }
+                    // Cancel/error: wipe ONLY the login session (device cookie stays),
+                    // then open password login — it cannot auto-login now
                     pendingStartUrl = null
+                    val cookieManager = CookieManager.getInstance()
+                    val expire = "Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure; SameSite=None; Domain=.frianzo.online"
+                    cookieManager.setCookie(API_URL, "vynzo_auth_token=; $expire")
+                    cookieManager.setCookie(API_URL, "vynzo_token=; $expire")
+                    cookieManager.setCookie(SITE_URL, "vynzo_auth_token=; $expire")
+                    cookieManager.setCookie(SITE_URL, "vynzo_token=; $expire")
+                    cookieManager.flush()
+                    webView.loadUrl("$SITE_URL/login")
                 }
             })
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
@@ -384,6 +392,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "frianzo_prefs"
         private const val KEY_APP_THEME = "app_theme"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
+        private const val KEY_REFERRAL_CLAIMED = "referral_claimed"
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -402,6 +411,11 @@ class MainActivity : AppCompatActivity() {
         }
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // Restore the referral marker: without this, every cold start re-posts
+        // the claim (the server rejects it, but it is a wasted request).
+        referralClaimed = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(KEY_REFERRAL_CLAIMED, false)
 
         webView = findViewById(R.id.webview)
         webView.setBackgroundColor(
@@ -664,6 +678,11 @@ class MainActivity : AppCompatActivity() {
             private var retryCount = 0
             private var lastFailedUrl: String? = null
 
+            // Renderer-crash loop guard: same idea as the network retry limit
+            // above — a few reloads are fine, endless crash -> reload is not.
+            private var rendererCrashCount = 0
+            private var lastRendererCrashMs = 0L
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                 super.onReceivedError(view, request, error)
                 if (request.isForMainFrame) {
@@ -695,8 +714,21 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
-                // WebView renderer crashed - reload instead of crashing app
-                // This fixes the open/close crash loop
+                // WebView renderer crashed - reload a few times, then stop:
+                // without a limit, a page that crashes on load loops forever
+                // (crash -> reload -> crash). After 3 crashes within 60s,
+                // show the error screen and let the user retry manually.
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastRendererCrashMs > 60_000L) rendererCrashCount = 0
+                lastRendererCrashMs = now
+                rendererCrashCount++
+                if (rendererCrashCount > 3) {
+                    rendererCrashCount = 0
+                    Log.e(TAG, "WebView renderer crashed repeatedly, showing error page")
+                    swipeRefresh.isRefreshing = false
+                    this@MainActivity.showLoadErrorPage(view, SITE_URL)
+                    return true
+                }
                 Log.e(TAG, "WebView renderer crashed, reloading")
                 try {
                     view.loadUrl(SITE_URL)
@@ -1042,6 +1074,15 @@ class MainActivity : AppCompatActivity() {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
+    // Persist the marker: the in-memory flag alone resets on every cold start,
+    // re-posting an already-settled claim. Only ever set on accepted or
+    // already-referred responses — never on network failure, so retries keep working.
+    private fun markReferralClaimed() {
+        referralClaimed = true
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putBoolean(KEY_REFERRAL_CLAIMED, true).apply()
+    }
+
     private fun tryClaimReferral() {
         if (referralClaimed) return
         val referrer = installReferrer?.trim().orEmpty()
@@ -1055,7 +1096,7 @@ class MainActivity : AppCompatActivity() {
                     claimReferralOnBackend(authToken, referrer, getReferralDeviceFingerprint())
                 }
                 if (accepted) {
-                    referralClaimed = true
+                    markReferralClaimed()
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Referral claim failed; will retry on next page", e)
@@ -1094,7 +1135,7 @@ class MainActivity : AppCompatActivity() {
             if (!accepted) {
                 val reason = data.optString("reason")
                 if (reason == "ACCOUNT_ALREADY_REFERRED" || reason == "DEVICE_ALREADY_REFERRED" || reason == "REFERRAL_ALREADY_CLAIMED") {
-                    referralClaimed = true
+                    markReferralClaimed()
                 }
             }
             accepted || referralClaimed
@@ -1134,7 +1175,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun notificationTargetUrl(intent: Intent?): String? {
-        val path = intent?.getStringExtra("url") ?: return null
+        val path = intent?.getStringExtra("fcm_url") ?: intent?.getStringExtra("url") ?: return null
         return if (path.startsWith("/") && !path.startsWith("//")) "$SITE_URL$path" else null
     }
 
@@ -1313,15 +1354,17 @@ class MainActivity : AppCompatActivity() {
         val isFrianzoHost = uri.scheme.equals("https", ignoreCase = true) &&
             (uri.host.equals(SITE_HOST, ignoreCase = true) ||
                 uri.host.equals("www.$SITE_HOST", ignoreCase = true))
-        val isReelsSection = isFrianzoHost &&
-            (uri.path == "/reels" || uri.path?.startsWith("/reels/") == true)
+        val isNoRefreshSection = isFrianzoHost &&
+            (uri.path == "/reels" || uri.path?.startsWith("/reels/") == true ||
+             uri.path == "/messages" || uri.path?.startsWith("/messages/") == true)
 
-        // Reel feed uses vertical swipe navigation. Disable pull-to-refresh only
-        // while the WebView is inside the reels section so a downward reel swipe
-        // can never trigger SwipeRefreshLayout.reload(). Other app pages keep
-        // their existing pull-to-refresh behavior.
-        swipeRefresh.isEnabled = !isReelsSection
-        if (isReelsSection) swipeRefresh.isRefreshing = false
+        // Reel feed uses vertical swipe navigation, and chat uses its own scroll
+        // to older messages. Disable pull-to-refresh only while the WebView is
+        // inside the reels or messages sections so a downward swipe can never
+        // trigger SwipeRefreshLayout.reload(). Other app pages keep their
+        // existing pull-to-refresh behavior.
+        swipeRefresh.isEnabled = !isNoRefreshSection
+        if (isNoRefreshSection) swipeRefresh.isRefreshing = false
     }
 
     private fun handleUrl(uri: Uri): Boolean {
