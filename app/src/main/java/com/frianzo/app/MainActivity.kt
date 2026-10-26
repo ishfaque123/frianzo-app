@@ -79,6 +79,7 @@ import java.util.concurrent.ConcurrentHashMap
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private lateinit var backCallback: OnBackPressedCallback
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var credentialManager: CredentialManager
     private lateinit var loadingOverlay: View
@@ -421,18 +422,21 @@ class MainActivity : AppCompatActivity() {
 
         // BACK (Android 16 / targetSdk 36): predictive back is on by default and
         // KEYCODE_BACK is no longer delivered to onKeyDown, so back must go
-        // through the dispatcher or the app closes instead of going back in
-        // web history.
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+        // through the dispatcher. The callback is enabled ONLY while the WebView
+        // has history (updated in doUpdateVisitedHistory/onPageFinished): at root
+        // it stays disabled so the system handles back itself (background +
+        // predictive back-to-home animation). A callback that disables itself on
+        // root back would stay disabled after the task returns from background
+        // (Android 12+ no longer finishes root activities), breaking back until
+        // the activity is destroyed.
+        backCallback = object : OnBackPressedCallback(false) {
             override fun handleOnBackPressed() {
                 if (webView.canGoBack()) {
                     webView.goBack()
-                } else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
                 }
             }
-        })
+        }
+        onBackPressedDispatcher.addCallback(this, backCallback)
         webView.setBackgroundColor(
             ContextCompat.getColor(
                 this,
@@ -635,6 +639,7 @@ class MainActivity : AppCompatActivity() {
             override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
                 super.doUpdateVisitedHistory(view, url, isReload)
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
+                backCallback.isEnabled = view.canGoBack()
             }
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
@@ -687,6 +692,7 @@ class MainActivity : AppCompatActivity() {
                 window.setBackgroundDrawableResource(
                     if (isDarkTheme()) R.color.frianzo_dark_bg else android.R.color.white
                 )
+                backCallback.isEnabled = view.canGoBack()
             }
 
             // Auto-retry on network errors (fixes net::ERR_FAILED permanent)
