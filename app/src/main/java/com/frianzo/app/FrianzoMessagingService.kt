@@ -53,8 +53,14 @@ class FrianzoMessagingService : FirebaseMessagingService() {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("fcm_url", url)
         }
+        // Unique request code per notification: PendingIntent equality ignores
+        // extras, so a fixed request code (0) + FLAG_UPDATE_CURRENT made every
+        // notification share one PendingIntent — tapping an older notification
+        // opened the newest notification's URL. The same unique value is used
+        // as the notification ID below so each notification keeps its own tap target.
+        val notificationId = System.currentTimeMillis().toInt()
         val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
+            this, notificationId, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -68,7 +74,7 @@ class FrianzoMessagingService : FirebaseMessagingService() {
             .setShowWhen(true)
             .build()
 
-        notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+        notificationManager.notify(notificationId, notification)
     }
 
     override fun onNewToken(token: String) {
