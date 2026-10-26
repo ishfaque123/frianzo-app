@@ -36,6 +36,10 @@
             </intent-filter>
         </service>
 
+        <receiver
+            android:name=".NotificationReplyReceiver"
+            android:exported="false" />
+
         <activity
             android:name=".MainActivity"
             android:theme="@style/Theme.Frianzo"
