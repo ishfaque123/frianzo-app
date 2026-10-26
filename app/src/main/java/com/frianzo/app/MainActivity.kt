@@ -20,6 +20,7 @@ import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import android.webkit.WebResourceResponse
 import androidx.core.content.FileProvider
+import androidx.activity.OnBackPressedCallback
 import java.io.File
 import android.net.ConnectivityManager
 import android.net.Network
@@ -32,7 +33,6 @@ import android.widget.Toast
 import com.otaliastudios.transcoder.Transcoder
 import com.otaliastudios.transcoder.TranscoderListener
 import com.otaliastudios.transcoder.strategy.DefaultVideoStrategy
-import android.view.KeyEvent
 import android.view.View
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
@@ -418,6 +418,21 @@ class MainActivity : AppCompatActivity() {
             .getBoolean(KEY_REFERRAL_CLAIMED, false)
 
         webView = findViewById(R.id.webview)
+
+        // BACK (Android 16 / targetSdk 36): predictive back is on by default and
+        // KEYCODE_BACK is no longer delivered to onKeyDown, so back must go
+        // through the dispatcher or the app closes instead of going back in
+        // web history.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (webView.canGoBack()) {
+                    webView.goBack()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
         webView.setBackgroundColor(
             ContextCompat.getColor(
                 this,
@@ -1748,14 +1763,6 @@ class MainActivity : AppCompatActivity() {
         webView.onPause()
         webView.pauseTimers()
         super.onPause()
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && webView.canGoBack()) {
-            webView.goBack()
-            return true
-        }
-        return super.onKeyDown(keyCode, event)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
