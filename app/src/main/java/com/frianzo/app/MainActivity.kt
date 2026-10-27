@@ -1108,6 +1108,14 @@ class MainActivity : AppCompatActivity() {
         if (referralClaimed) return
         val referrer = installReferrer?.trim().orEmpty()
         if (referrer.isEmpty()) return
+        // Organic installs carry a referrer without username= (e.g. Play
+        // organic). The backend rejects those with INVALID_REFERRAL, so
+        // posting them would retry forever. Skip and mark settled.
+        if (!referrer.contains("username=")) {
+            Log.i(TAG, "Referral has no username=, skipping claim")
+            markReferralClaimed()
+            return
+        }
 
         lifecycleScope.launch {
             try {
@@ -1149,6 +1157,23 @@ class MainActivity : AppCompatActivity() {
             val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (responseCode !in 200..299) {
                 Log.w(TAG, "Referral claim HTTP $responseCode: $response")
+                // Terminal 400s will never succeed on retry: settle the
+                // claim so the app stops re-posting on every page finish.
+                // Network errors and 5xx keep retrying (no mark).
+                if (responseCode == 400) {
+                    val code = try {
+                        JSONObject(response).optJSONObject("error")?.optString("code").orEmpty()
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    if (code == "INVALID_REFERRAL" || code == "REFERRER_NOT_FOUND" ||
+                        code == "SELF_REFERRAL" || code == "INVALID_DEVICE_FINGERPRINT" ||
+                        code == "ACCOUNT_ALREADY_REFERRED" || code == "DEVICE_ALREADY_REFERRED" ||
+                        code == "REFERRAL_ALREADY_CLAIMED"
+                    ) {
+                        markReferralClaimed()
+                    }
+                }
                 return false
             }
             val data = JSONObject(response).optJSONObject("data") ?: return false
