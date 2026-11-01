@@ -28,6 +28,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
 import android.util.Log
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.Toast
 import com.otaliastudios.transcoder.Transcoder
@@ -81,6 +84,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var credentialManager: CredentialManager
     private lateinit var loadingOverlay: View
+    private var loadingDotAnimators: List<AnimatorSet> = emptyList()
     private var loadingOverlayHidden = false
     // FB-style offline recovery: while our own load-error screen is up we
     // remember the failed URL so the app can reload it by itself the moment
@@ -461,9 +465,11 @@ class MainActivity : AppCompatActivity() {
                 if (darkTheme) R.color.frianzo_dark_bg else android.R.color.white
             )
         )
-        // Smooth-loading: the overlay is a static ring spinner (see
-        // activity_main.xml) matching the web LoadingState — no dot
-        // animation code is needed anymore.
+        // Smooth-loading, dots revision: start the 6-dot pulse
+        // animation (720ms cycle, staggered 120ms, matching the web loading dots). The overlay still hides only on
+        // NativeBridge.notifyAuthReady() or the 15s safety timeout below
+        // — never on onPageFinished.
+        startLoadingDots()
         // Safety: never leave the loading overlay covering the app if the
         // web auth-ready signal somehow never arrives.
         loadingOverlay.postDelayed({ hideLoadingOverlay() }, 15000)
@@ -1350,9 +1356,34 @@ class MainActivity : AppCompatActivity() {
      * the web ThemeProvider's 'system' behavior.
      */
     /** Fade the first-load overlay out (idempotent: only the first call acts). */
+    /** Pulse the 6 overlay dots (720ms cycle, staggered 120ms per dot). */
+    private fun startLoadingDots() {
+        val dotIds = listOf(R.id.dot1, R.id.dot2, R.id.dot3, R.id.dot4, R.id.dot5, R.id.dot6)
+        loadingDotAnimators = dotIds.mapIndexed { index, dotId ->
+            val dot = findViewById<ImageView>(dotId)
+            // Repeat forever (until hideLoadingOverlay cancels them);
+            // without this each dot would pulse exactly once and stop.
+            val animators = listOf(
+                ObjectAnimator.ofFloat(dot, "scaleX", 1f, 1.6f, 1f),
+                ObjectAnimator.ofFloat(dot, "scaleY", 1f, 1.6f, 1f),
+                ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.4f, 1f)
+            ).onEach {
+                it.duration = 720
+                it.repeatCount = ObjectAnimator.INFINITE
+            }
+            AnimatorSet().apply {
+                playTogether(animators)
+                startDelay = (index * 120).toLong()
+                start()
+            }
+        }
+    }
+
     private fun hideLoadingOverlay() {
         if (loadingOverlayHidden) return
         loadingOverlayHidden = true
+        loadingDotAnimators.forEach { it.cancel() }
+        loadingDotAnimators = emptyList()
         loadingOverlay.animate()
             .alpha(0f)
             .setDuration(250)
