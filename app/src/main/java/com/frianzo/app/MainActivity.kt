@@ -34,8 +34,6 @@ import com.otaliastudios.transcoder.Transcoder
 import com.otaliastudios.transcoder.TranscoderListener
 import com.otaliastudios.transcoder.strategy.DefaultVideoStrategy
 import android.view.View
-import android.animation.ObjectAnimator
-import android.animation.ValueAnimator
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
@@ -83,7 +81,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var credentialManager: CredentialManager
     private lateinit var loadingOverlay: View
-    private val dotAnimators = mutableListOf<ObjectAnimator>()
     private var loadingOverlayHidden = false
     // FB-style offline recovery: while our own load-error screen is up we
     // remember the failed URL so the app can reload it by itself the moment
@@ -185,6 +182,19 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun startReelDownload(url: String): Boolean {
             return enqueueReelDownload(url)
+        }
+
+        // Smooth-loading: called by the web app (useAuth) when its auth
+        // check settles (fetchMe done), on /login and on /. Hiding the
+        // overlay here — instead of on onPageFinished, which fires when
+        // only the HTML document has arrived, before React hydration and
+        // before auth resolves — is what makes startup read as ONE
+        // continuous loading screen. Idempotent via hideLoadingOverlay();
+        // the 15s safety timeout remains the backstop if this is never
+        // called (e.g. a page that never mounts useAuth, or a JS error).
+        @JavascriptInterface
+        fun notifyAuthReady() {
+            runOnUiThread { hideLoadingOverlay() }
         }
     }
 
@@ -451,9 +461,11 @@ class MainActivity : AppCompatActivity() {
                 if (darkTheme) R.color.frianzo_dark_bg else android.R.color.white
             )
         )
-        startLoadingDots()
+        // Smooth-loading: the overlay is a static ring spinner (see
+        // activity_main.xml) matching the web LoadingState — no dot
+        // animation code is needed anymore.
         // Safety: never leave the loading overlay covering the app if the
-        // first page load somehow never reports finished.
+        // web auth-ready signal somehow never arrives.
         loadingOverlay.postDelayed({ hideLoadingOverlay() }, 15000)
         credentialManager = CredentialManager.create(this)
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
@@ -667,7 +679,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
-                hideLoadingOverlay()
+                // Smooth-loading: do NOT hide the overlay here. onPageFinished
+                // means only the HTML document arrived — React hydration and
+                // the auth check (fetchMe) are still pending, and hiding now
+                // is the seam that exposed the web LoadingState as a second
+                // screen. The overlay hides on NativeBridge.notifyAuthReady()
+                // or the 15s safety timeout instead.
                 tryClaimReferral()
                 // Proactively request camera permission on camera page so that
                 // when the website calls getUserMedia, the permission is already
@@ -1332,27 +1349,10 @@ class MainActivity : AppCompatActivity() {
      * (nothing reported yet) falls back to the system night mode, mirroring
      * the web ThemeProvider's 'system' behavior.
      */
-    /** Start the FB-style pulsing dots on the first-load overlay. */
-    private fun startLoadingDots() {
-        val dotIds = listOf(R.id.dot1, R.id.dot2, R.id.dot3, R.id.dot4, R.id.dot5, R.id.dot6)
-        dotIds.forEachIndexed { i, id ->
-            val dot = findViewById<View>(id)
-            val anim = ObjectAnimator.ofFloat(dot, View.ALPHA, 0.25f, 1f, 0.25f).apply {
-                duration = 720
-                startDelay = (i * 120).toLong()
-                repeatCount = ValueAnimator.INFINITE
-            }
-            dotAnimators.add(anim)
-            anim.start()
-        }
-    }
-
     /** Fade the first-load overlay out (idempotent: only the first call acts). */
     private fun hideLoadingOverlay() {
         if (loadingOverlayHidden) return
         loadingOverlayHidden = true
-        dotAnimators.forEach { it.cancel() }
-        dotAnimators.clear()
         loadingOverlay.animate()
             .alpha(0f)
             .setDuration(250)
