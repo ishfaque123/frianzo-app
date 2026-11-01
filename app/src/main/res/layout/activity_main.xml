@@ -15,16 +15,11 @@
 
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
-    <!-- First-load overlay: keeps the branded splash on screen until the
-         web auth check is done, instead of the blank black screen seen
-         between the logo splash and the feed. Smooth-loading, dots
-         revision (2026-11-01): this looks identical to the web
-         web loading screen (64dp logo + 6 pulsing dots + "Loading…",
-         same #1e2530 dark background), so the native overlay and the web
-         loading screen read as ONE continuous screen. Hidden by
-         MainActivity when the web app signals auth-ready
-         (NativeBridge.notifyAuthReady) or by the 15s safety timeout, so
-         it can never get stuck. -->
+    <!-- First-load overlay (user-ordered 2026-10-20): keeps the branded
+         splash (logo + FB-style pulsing dots) on screen until the first page
+         paints, instead of the blank black screen seen between the logo
+         splash and the feed. Hidden by MainActivity on first onPageFinished,
+         with a 15s safety timeout so it can never get stuck. -->
     <LinearLayout
         android:id="@+id/loading_overlay"
         android:layout_width="match_parent"
@@ -34,75 +29,67 @@
         android:orientation="vertical">
 
         <ImageView
-            android:layout_width="64dp"
-            android:layout_height="64dp"
+            android:layout_width="96dp"
+            android:layout_height="96dp"
             android:contentDescription="Frianzo"
             android:src="@mipmap/ic_launcher" />
 
         <LinearLayout
-            android:id="@+id/loading_dots"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="28dp"
+            android:gravity="center"
             android:orientation="horizontal">
 
-            <ImageView
+            <View
                 android:id="@+id/dot1"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="3dp"
-                android:contentDescription="@null"
-                android:src="@drawable/loading_dot" />
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
 
-            <ImageView
+            <View
                 android:id="@+id/dot2"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="3dp"
-                android:contentDescription="@null"
-                android:src="@drawable/loading_dot" />
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
 
-            <ImageView
+            <View
                 android:id="@+id/dot3"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="3dp"
-                android:contentDescription="@null"
-                android:src="@drawable/loading_dot" />
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
 
-            <ImageView
+            <View
                 android:id="@+id/dot4"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="3dp"
-                android:contentDescription="@null"
-                android:src="@drawable/loading_dot" />
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
 
-            <ImageView
+            <View
                 android:id="@+id/dot5"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="3dp"
-                android:contentDescription="@null"
-                android:src="@drawable/loading_dot" />
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
 
-            <ImageView
+            <View
                 android:id="@+id/dot6"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginHorizontal="3dp"
-                android:contentDescription="@null"
-                android:src="@drawable/loading_dot" />
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:layout_marginHorizontal="4dp"
+                android:alpha="0.25"
+                android:background="@drawable/loading_dot" />
 
         </LinearLayout>
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Loading…"
-            android:textColor="#64748b"
-            android:textSize="14sp" />
 
     </LinearLayout>
 
