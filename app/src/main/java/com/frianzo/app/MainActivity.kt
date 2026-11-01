@@ -21,7 +21,6 @@ import android.webkit.MimeTypeMap
 import android.webkit.WebResourceResponse
 import androidx.core.content.FileProvider
 import androidx.activity.OnBackPressedCallback
-import java.io.ByteArrayInputStream
 import java.io.File
 import android.net.ConnectivityManager
 import android.net.Network
@@ -490,15 +489,7 @@ class MainActivity : AppCompatActivity() {
 
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
-        // Play Data Safety ("No data shared with third parties"): third-party
-        // cookies must stay off in the app WebView, or any third-party script
-        // that ever loads could receive identifiers. First-party cookies for
-        // frianzo.online still work (setAcceptCookie(true) above), and the
-        // auth cookies set in setAuthCookies() are for Frianzo's own
-        // .frianzo.online / api.frianzo.online hosts (same site), not for a
-        // third party — but login/session MUST be re-tested on a real device
-        // after this change before release.
-        cookieManager.setAcceptThirdPartyCookies(webView, false)
+        cookieManager.setAcceptThirdPartyCookies(webView, true)
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest) {
@@ -772,17 +763,6 @@ class MainActivity : AppCompatActivity() {
                 view: WebView,
                 request: WebResourceRequest
             ): WebResourceResponse? {
-                // Play Data Safety defence-in-depth: never let an advertising
-                // request leave the app WebView, even from a cached page or a
-                // placement the frontend gates missed. The frontend gates
-                // (AdsterraSlot + the layout's "; wv" check) are the primary
-                // fix; this block guarantees no request to Google's AdSense
-                // loader or Adsterra's host ever leaves the device.
-                val host = request.url.host ?: ""
-                if (host == "pagead2.googlesyndication.com" || host.endsWith(".googlesyndication.com") ||
-                    host == "bicea.org" || host.endsWith(".bicea.org")) {
-                    return WebResourceResponse("text/javascript", "UTF-8", ByteArrayInputStream(ByteArray(0)))
-                }
                 // Serve files staged from an incoming share-sheet intent so the
                 // compose page can fetch and attach them: /__share/<token>.
                 // Same-origin with the site, so no CORS issues.
@@ -1710,10 +1690,7 @@ class MainActivity : AppCompatActivity() {
     private fun setAuthCookies(token: String, deviceToken: String) {
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
-        // Play Data Safety: keep third-party cookies off here too (see the
-        // initial setup above). These auth cookies are Frianzo's own
-        // first-party/same-site cookies, not third-party cookies.
-        cookieManager.setAcceptThirdPartyCookies(webView, false)
+        cookieManager.setAcceptThirdPartyCookies(webView, true)
 
         val opts = "Path=/; Secure; HttpOnly; SameSite=None; Domain=.frianzo.online"
 
