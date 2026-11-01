@@ -1680,6 +1680,13 @@ class MainActivity : AppCompatActivity() {
         signInOverlayShown = true
         loadingOverlay.alpha = 1f
         loadingOverlay.visibility = View.VISIBLE
+        // First-load hide cancelled the dot pulse (hideLoadingOverlay),
+        // so a re-shown overlay would otherwise show static dots.
+        // Restart the pulse here; cancel first so a previous (hidden)
+        // sign-in's animators can never stack on top of the new ones.
+        loadingDotAnimators.forEach { it.cancel() }
+        loadingDotAnimators = emptyList()
+        startLoadingDots()
     }
 
     private fun hideSignInOverlay() {
