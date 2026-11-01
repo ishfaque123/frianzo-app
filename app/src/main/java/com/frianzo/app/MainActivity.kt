@@ -86,6 +86,20 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadingOverlay: View
     private var loadingDotAnimators: List<AnimatorSet> = emptyList()
     private var loadingOverlayHidden = false
+    // Google sign-in single-flight guard (2026-11-01 double-click fix):
+    // every tap on "Continue with Google" funnels through handleUrl() ->
+    // launchNativeGoogleSignIn(), and the login page stays on screen (the
+    // WebView never navigates away), so without this flag 3-4 fast taps
+    // start 3-4 independent sign-in flows, duplicate backend calls and
+    // duplicate error dialogs. While true, further taps are ignored.
+    // Reset in the finally block of launchNativeGoogleSignIn(), so a
+    // cancelled or failed sign-in always re-enables the button.
+    private var googleSignInInFlight = false
+    // Tracks whether the loading overlay was re-shown for a sign-in (it is
+    // normally a first-load-only overlay, hidden once via
+    // loadingOverlayHidden). Only a sign-in re-show may hide it again, so
+    // this never disturbs the first-load overlay state.
+    private var signInOverlayShown = false
     // FB-style offline recovery: while our own load-error screen is up we
     // remember the failed URL so the app can reload it by itself the moment
     // the network comes back (and pull-to-refresh retries the same page).
@@ -1454,8 +1468,14 @@ class MainActivity : AppCompatActivity() {
         ) return false
 
         if (scheme == "https" && host == API_HOST && path == GOOGLE_START_PATH) {
+            if (googleSignInInFlight) {
+                Log.i(TAG, "Google sign-in already in flight, ignoring repeat tap")
+                return true
+            }
+            googleSignInInFlight = true
             Log.i(TAG, "Intercepted Google start URL, launching native sign-in")
             markOAuthInProgress()
+            showSignInOverlay()
             launchNativeGoogleSignIn()
             return true
         }
@@ -1640,7 +1660,37 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     Log.w(TAG, "Login-failed UI skipped: activity finishing/destroyed")
                 }
+            } finally {
+                // Always re-enable Google sign-in, whatever the outcome:
+                // success, user cancellation, or any error. Without this,
+                // a cancelled picker would leave the button dead.
+                googleSignInInFlight = false
+                hideSignInOverlay()
             }
+        }
+    }
+
+    /** Re-show the loading overlay while a Google sign-in is in flight, so
+     * the user can see a sign-in is already running and stops tapping.
+     * Only acts when the overlay is not already visible; tracked separately
+     * from the first-load flag so it never disturbs startup state. */
+    private fun showSignInOverlay() {
+        if (!::loadingOverlay.isInitialized) return
+        if (loadingOverlay.visibility == View.VISIBLE) return
+        signInOverlayShown = true
+        loadingOverlay.alpha = 1f
+        loadingOverlay.visibility = View.VISIBLE
+    }
+
+    private fun hideSignInOverlay() {
+        if (!signInOverlayShown) return
+        signInOverlayShown = false
+        if (::loadingOverlay.isInitialized) {
+            loadingOverlay.animate()
+                .alpha(0f)
+                .setDuration(250)
+                .withEndAction { loadingOverlay.visibility = View.GONE }
+                .start()
         }
     }
 
