@@ -232,6 +232,32 @@ class MainActivity : AppCompatActivity() {
 
     private var pendingStartUrl: String? = null
 
+    /**
+     * Deep link a user tapped outside the app (e.g. a shared link in
+     * WhatsApp) that must survive the login step: when the app starts
+     * logged out, the web login always lands on the home feed, so the
+     * target is remembered here and loaded from onPageFinished once the
+     * home feed finishes loading with a fresh auth session.
+     */
+    private var pendingDeepLinkUrl: String? = null
+
+    /**
+     * Returns the tapped URL only for a genuine VIEW intent to our own
+     * site. Host and scheme are validated before trusting it, so no other
+     * app's link can make the WebView open an arbitrary site through this
+     * path. OAuth callbacks, share-sheet intents and notification intents
+     * are handled by their own branches and never reach here.
+     */
+    private fun deepLinkUrl(intent: Intent?): String? {
+        val action = intent?.action
+        if (action != null && action != Intent.ACTION_VIEW) return null
+        val uri = intent?.data ?: return null
+        if (!uri.scheme.equals("https", ignoreCase = true)) return null
+        val host = uri.host?.lowercase() ?: return null
+        if (host != SITE_HOST && host != "www.$SITE_HOST") return null
+        return uri.toString()
+    }
+
     private fun isBiometricEnabledForLaunch(): Boolean {
         return getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getBoolean(KEY_BIOMETRIC_ENABLED, false)
@@ -682,6 +708,18 @@ class MainActivity : AppCompatActivity() {
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
                 hideLoadingOverlay()
+                // A remembered shared-link target survives login: the web
+                // login always lands on the home feed, so once that feed
+                // finishes with a fresh auth session, jump to the target.
+                // pendingDeepLinkUrl is cleared before loading, so the
+                // target's own finish can never loop back here.
+                val pendingDeepLink = pendingDeepLinkUrl
+                if (pendingDeepLink != null && hasAuthSession() &&
+                    (url == SITE_URL || url == "$SITE_URL/")
+                ) {
+                    pendingDeepLinkUrl = null
+                    webView.loadUrl(pendingDeepLink)
+                }
                 tryClaimReferral()
                 // Proactively request camera permission on camera page so that
                 // when the website calls getUserMedia, the permission is already
@@ -833,11 +871,21 @@ class MainActivity : AppCompatActivity() {
                 if (oauthUri != null && isOAuthCallback(oauthUri)) {
                     webView.post { handleOAuthCallback(oauthUri) }
                 } else {
-                    val startUrl = notificationTargetUrl(intent) ?: defaultStartUrl()
+                    // Shared-link tap: open the tapped URL itself, not the
+                    // home feed. Logged out, remember it so the login step
+                    // (which always lands on home) can return to it.
+                    val deepLink = deepLinkUrl(intent)
+                    if (deepLink != null && !hasAuthSession()) {
+                        pendingDeepLinkUrl = deepLink
+                    }
+                    val startUrl = deepLink
+                        ?: notificationTargetUrl(intent) ?: defaultStartUrl()
                     // If biometric login is enabled, ask for fingerprint before loading
                     if (isBiometricEnabledForLaunch()) {
                         pendingStartUrl = startUrl
                         showBiometricPromptForLaunch()
+                    } else if (deepLink != null && !hasAuthSession()) {
+                        webView.loadUrl("$SITE_URL/login")
                     } else {
                         webView.loadUrl(startUrl)
                     }
@@ -1401,6 +1449,19 @@ class MainActivity : AppCompatActivity() {
         val action = intent?.action
         if (action == Intent.ACTION_SEND || action == Intent.ACTION_SEND_MULTIPLE) {
             intent?.let { handleShareIntent(it) }
+            return
+        }
+        // Shared-link tap while the app is already running: navigate to
+        // the tapped URL instead of staying on the current page. Logged
+        // out, go to login and remember the target (see pendingDeepLinkUrl).
+        val deepLink = deepLinkUrl(intent)
+        if (deepLink != null) {
+            if (hasAuthSession()) {
+                webView.loadUrl(deepLink)
+            } else {
+                pendingDeepLinkUrl = deepLink
+                webView.loadUrl("$SITE_URL/login")
+            }
             return
         }
         notificationTargetUrl(intent)?.let { webView.loadUrl(it) }
