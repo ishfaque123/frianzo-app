@@ -99,6 +99,18 @@ class MainActivity : AppCompatActivity() {
     // this never disturbs the first-load overlay state.
     private var signInOverlayShown = false
     private var loadingOverlayHidden = false
+    // First-load render gate (v23): a finished load is no longer enough to
+    // hide the overlay — a stale cached shell can report onPageFinished with
+    // an empty body and dead scripts, which used to leave a permanent blank
+    // screen. The watchdog below polls the DOM until real content renders,
+    // self-heals once with a cache clear + reload if the finished page is
+    // empty, and shows the load-error page if content never appears.
+    @Volatile private var firstPageFinished = false
+    @Volatile private var firstLoadHealAttempted = false
+    @Volatile private var firstLoadWatchdogRunning = false
+    private var firstLoadStartedAtMs = 0L
+    private var firstEmptyFinishedAtMs = 0L
+    private val firstLoadCheckRunnable = Runnable { checkFirstLoadRendered() }
     // FB-style offline recovery: while our own load-error screen is up we
     // remember the failed URL so the app can reload it by itself the moment
     // the network comes back (and pull-to-refresh retries the same page).
@@ -430,6 +442,15 @@ class MainActivity : AppCompatActivity() {
         private const val GOOGLE_CONFIG_PATH = "/api/auth/google/native-config"
         private const val GOOGLE_NATIVE_LOGIN_PATH = "/api/auth/google/native"
         private const val HTTP_TIMEOUT_MS = 15000
+        // First-load render gate (v23): poll the DOM every second, and give
+        // the first page up to a minute from load start to render real
+        // content before the load-error page takes over.
+        private const val FIRST_LOAD_POLL_MS = 1000L
+        private const val FIRST_LOAD_TIMEOUT_MS = 60000L
+        // A healthy page can sit empty for a few seconds while its scripts
+        // boot; only a page that stays empty this long after finishing is
+        // treated as a dead shell and healed.
+        private const val FIRST_LOAD_HEAL_DELAY_MS = 5000L
         private const val PREFS_NAME = "frianzo_prefs"
         private const val KEY_APP_THEME = "app_theme"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
@@ -492,9 +513,14 @@ class MainActivity : AppCompatActivity() {
             )
         )
         startLoadingDots()
-        // Safety: never leave the loading overlay covering the app if the
-        // first page load somehow never reports finished.
-        loadingOverlay.postDelayed({ hideLoadingOverlay() }, 15000)
+        // First-load render gate (v23): arm the watchdog instead of the old
+        // blind 15s hide. The overlay now hides only once the page has
+        // really rendered content; a finished-but-empty page gets one
+        // cache-clear + reload heal, and if content never appears within
+        // FIRST_LOAD_TIMEOUT_MS the load-error page is shown — the overlay
+        // can never again lift to reveal a blank screen.
+        firstLoadStartedAtMs = android.os.SystemClock.elapsedRealtime()
+        startFirstLoadWatchdog()
         credentialManager = CredentialManager.create(this)
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
         loadInstallReferrer()
@@ -707,7 +733,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
-                hideLoadingOverlay()
+                // v23 render gate: a finished load is not proof of a working
+                // page — a stale cached shell finishes with an empty body and
+                // dead scripts. Only the watchdog may hide the overlay, once
+                // real content is on the page.
+                if (!loadingOverlayHidden) {
+                    firstPageFinished = true
+                    startFirstLoadWatchdog()
+                }
                 // A remembered shared-link target survives login: the web
                 // login always lands on the home feed, so once that feed
                 // finishes with a fresh auth session, jump to the target.
@@ -1406,6 +1439,97 @@ class MainActivity : AppCompatActivity() {
             }
             dotAnimators.add(anim)
             anim.start()
+        }
+    }
+
+    /** Arm the first-load render watchdog (idempotent while it is running). */
+    private fun startFirstLoadWatchdog() {
+        if (loadingOverlayHidden || firstLoadWatchdogRunning) return
+        firstLoadWatchdogRunning = true
+        loadingOverlay.removeCallbacks(firstLoadCheckRunnable)
+        loadingOverlay.post(firstLoadCheckRunnable)
+    }
+
+    private fun stopFirstLoadWatchdog() {
+        firstLoadWatchdogRunning = false
+        if (::loadingOverlay.isInitialized) {
+            loadingOverlay.removeCallbacks(firstLoadCheckRunnable)
+        }
+    }
+
+    /**
+     * First-load render gate (v23), polled every FIRST_LOAD_POLL_MS:
+     * - Real content on the page -> hide the overlay (the only way it hides).
+     * - The load-error page is showing -> never heal over it; once it renders
+     *   content the first rule hides the overlay, and at the total timeout
+     *   the overlay lifts anyway so the error page is what the user sees.
+     * - Page finished but body still empty (dead cached shell) -> one
+     *   self-heal: clear the WebView cache and reload, overlay stays up.
+     * - Still nothing after FIRST_LOAD_TIMEOUT_MS from load start -> show
+     *   the load-error page and lift the overlay onto it.
+     * No path leaves a bare blank screen behind the overlay.
+     */
+    private fun checkFirstLoadRendered() {
+        if (loadingOverlayHidden) {
+            stopFirstLoadWatchdog()
+            return
+        }
+        if (!::webView.isInitialized) {
+            loadingOverlay.postDelayed(firstLoadCheckRunnable, FIRST_LOAD_POLL_MS)
+            return
+        }
+        val elapsedMs = android.os.SystemClock.elapsedRealtime() - firstLoadStartedAtMs
+        webView.evaluateJavascript(
+            "(function(){try{var b=document.body;if(!b)return 'empty';" +
+                "var t=(b.innerText||'').trim();" +
+                "return (t.length>0||b.childElementCount>10)?'content':'empty';}" +
+                "catch(e){return 'empty';}})()"
+        ) { result ->
+            if (loadingOverlayHidden) {
+                stopFirstLoadWatchdog()
+                return@evaluateJavascript
+            }
+            val hasContent = result != null && result.contains("content")
+            when {
+                hasContent -> {
+                    stopFirstLoadWatchdog()
+                    hideLoadingOverlay()
+                }
+                loadErrorShowing -> {
+                    if (elapsedMs >= FIRST_LOAD_TIMEOUT_MS) {
+                        stopFirstLoadWatchdog()
+                        hideLoadingOverlay()
+                    } else {
+                        loadingOverlay.postDelayed(firstLoadCheckRunnable, FIRST_LOAD_POLL_MS)
+                    }
+                }
+                firstPageFinished && !firstLoadHealAttempted -> {
+                    // Heal only a PERSISTENTLY empty finished page: a healthy
+                    // page may sit empty briefly while its scripts boot, and
+                    // clearing the cache mid-boot on a slow connection would
+                    // restart a load that was about to succeed.
+                    if (firstEmptyFinishedAtMs == 0L) {
+                        firstEmptyFinishedAtMs = android.os.SystemClock.elapsedRealtime()
+                    }
+                    if (android.os.SystemClock.elapsedRealtime() - firstEmptyFinishedAtMs >= FIRST_LOAD_HEAL_DELAY_MS) {
+                        firstLoadHealAttempted = true
+                        Log.w(TAG, "First load finished with an empty page; clearing cache and reloading once")
+                        try {
+                            webView.clearCache(true)
+                            webView.reload()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "First-load self-heal failed", e)
+                        }
+                    }
+                    loadingOverlay.postDelayed(firstLoadCheckRunnable, FIRST_LOAD_POLL_MS)
+                }
+                elapsedMs >= FIRST_LOAD_TIMEOUT_MS -> {
+                    stopFirstLoadWatchdog()
+                    showLoadErrorPage(webView, webView.url ?: SITE_URL)
+                    hideLoadingOverlay()
+                }
+                else -> loadingOverlay.postDelayed(firstLoadCheckRunnable, FIRST_LOAD_POLL_MS)
+            }
         }
     }
 
