@@ -470,6 +470,7 @@ class MainActivity : AppCompatActivity() {
         // content before the load-error page takes over.
         private const val FIRST_LOAD_POLL_MS = 1000L
         private const val SIGN_IN_NAV_POLL_MS = 500L
+        private const val SIGN_IN_PAINT_FALLBACK_MS = 1500L
         private const val FIRST_LOAD_TIMEOUT_MS = 60000L
         // A healthy page can sit empty for a few seconds while its scripts
         // boot; only a page that stays empty this long after finishing is
@@ -1719,7 +1720,11 @@ class MainActivity : AppCompatActivity() {
             googleSignInInFlight = true
             Log.i(TAG, "Intercepted Google start URL, launching native sign-in")
             markOAuthInProgress()
-            showSignInOverlay()
+            // No loading overlay yet: the login page stays on screen and
+            // Google's account chooser opens over it. The overlay is shown
+            // only after the user picks an account (see
+            // launchNativeGoogleSignIn), so the tap never looks like the
+            // page reloaded or went away.
             launchNativeGoogleSignIn()
             return true
         }
@@ -1854,6 +1859,11 @@ class MainActivity : AppCompatActivity() {
                 } catch (e: GoogleIdTokenParsingException) {
                     throw IllegalStateException("Invalid Google ID credential", e)
                 }
+                // The user has picked an account: only now cover the login
+                // page with the loading overlay. It stays up through the
+                // backend exchange and, via the post-login navigation gate,
+                // until the destination page has rendered.
+                showSignInOverlay()
                 Log.i(TAG, "Step 3: Got ID token, calling backend /native")
 
                 val deviceToken = getCookieValue("vynzo_device")
@@ -2012,17 +2022,52 @@ class MainActivity : AppCompatActivity() {
         ) { result ->
             if (!signInNavPending) return@evaluateJavascript
             if (result != null && result.contains("content")) {
-                endSignInNavGate()
-                hideSignInOverlay()
+                liftSignInOverlayAfterPaint()
             } else {
                 loadingOverlay.postDelayed(signInNavCheckRunnable, SIGN_IN_NAV_POLL_MS)
             }
         }
     }
 
-    /** Re-show the loading overlay while a Google sign-in is in flight, so
-     * the user can see a sign-in is already running and stops tapping.
-     * Only acts when the overlay is not already visible; tracked separately
+    /**
+     * The probe found real content in the new page's DOM, but the WebView
+     * may not have painted it yet - a blank frame can slip in between.
+     * Wait for the visual-state callback (the frame is ready to draw)
+     * before lifting the overlay. A timed fallback lifts it anyway, so
+     * the user is never trapped behind the loading screen.
+     */
+    private fun liftSignInOverlayAfterPaint() {
+        if (!signInNavPending) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) {
+            endSignInNavGate()
+            hideSignInOverlay()
+            return
+        }
+        loadingOverlay.postDelayed({
+            if (signInNavPending) {
+                Log.w(TAG, "Sign-in paint callback did not arrive; lifting the overlay")
+                endSignInNavGate()
+                hideSignInOverlay()
+            }
+        }, SIGN_IN_PAINT_FALLBACK_MS)
+        webView.postVisualStateCallback(
+            android.os.SystemClock.elapsedRealtime(),
+            object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    runOnUiThread {
+                        if (signInNavPending) {
+                            endSignInNavGate()
+                            hideSignInOverlay()
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    /** Show the loading overlay once the user has picked a Google account,
+     * while the backend exchange and the post-login navigation run. Only
+     * acts when the overlay is not already visible; tracked separately
      * from the first-load flag so it never disturbs startup state. */
     private fun showSignInOverlay() {
         if (!::loadingOverlay.isInitialized) return
