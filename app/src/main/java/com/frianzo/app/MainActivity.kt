@@ -1712,6 +1712,20 @@ class MainActivity : AppCompatActivity() {
             (host == SITE_HOST || host == "www.$SITE_HOST")
         ) return false
 
+        // Keep the PayFast checkout inside the WebView. Its payment
+        // pages depend on the session started by the checkout form
+        // POST, so handing them to an external browser loses that
+        // session and PayFast shows its generic error page. The
+        // payment return URLs on the API host must also land back
+        // inside the app.
+        if (scheme == "https" &&
+            (host == "ipguat.apps.net.pk" || host == "ipg1.apps.net.pk")
+        ) return false
+
+        if (scheme == "https" && host == API_HOST &&
+            path?.startsWith("/api/payfast/") == true
+        ) return false
+
         if (scheme == "https" && host == API_HOST && path == GOOGLE_START_PATH) {
             if (googleSignInInFlight) {
                 Log.i(TAG, "Google sign-in already in flight, ignoring repeat tap")
