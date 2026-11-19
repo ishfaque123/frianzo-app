@@ -22,6 +22,7 @@ import android.webkit.WebResourceResponse
 import androidx.core.content.FileProvider
 import androidx.activity.OnBackPressedCallback
 import java.io.File
+import java.io.IOException
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
@@ -439,8 +440,20 @@ class MainActivity : AppCompatActivity() {
         private const val GOOGLE_START_PATH = "/api/auth/google/start"
         private const val OAUTH_SCHEME = "frianzo"
         private const val OAUTH_HOST = "oauth"
-        private const val GOOGLE_CONFIG_PATH = "/api/auth/google/native-config"
         private const val GOOGLE_NATIVE_LOGIN_PATH = "/api/auth/google/native"
+        // The Google Web Client ID is a public identifier, not a secret. It is
+        // embedded in the app so the account chooser can open immediately:
+        // fetching it from the server first made sign-in fail on slow
+        // connections, because the fetch timed out before the chooser ever
+        // appeared and there was no retry.
+        private const val GOOGLE_SERVER_CLIENT_ID =
+            "342938567781-j62g710q0clhrn84draqd64oia59c44f.apps.googleusercontent.com"
+        // The final login request is retried a few times on transient
+        // failures only (network errors, HTTP 408, 429 and 5xx). Re-sending
+        // the same Google ID token is safe: the backend login is keyed to
+        // the Google account, so a repeated request returns the same session.
+        private const val GOOGLE_LOGIN_MAX_ATTEMPTS = 3
+        private const val GOOGLE_LOGIN_RETRY_BASE_DELAY_MS = 1000L
         private const val HTTP_TIMEOUT_MS = 15000
         // First-load render gate (v23): poll the DOM every second, and give
         // the first page up to a minute from load start to render real
@@ -1466,10 +1479,22 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * First-load render gate (v23), polled every FIRST_LOAD_POLL_MS:
-     * - Real content on the page -> hide the overlay (the only way it hides).
+     * - Real content on the page AND the web app has mounted (it sets the
+     *   `data-frianzo-ready` attribute / `window.__FRIANZO_READY__` once
+     *   React hydrates) -> hide the overlay (the only way it hides).
+     *   Content alone is not enough: the HTML can paint while the JS
+     *   bundle is still downloading, and the page's buttons stay dead
+     *   until hydration — on a slow connection that gap is long.
+     * - Content rendered but the app not mounted yet -> keep polling;
+     *   never self-heal over a page that is still booting. If the total
+     *   timeout passes in that state (dead scripts), the load-error
+     *   page is shown exactly like the total-timeout path below.
      * - The load-error page is showing -> never heal over it; once it renders
      *   content the first rule hides the overlay, and at the total timeout
      *   the overlay lifts anyway so the error page is what the user sees.
+     *   (The error page is a data URL with no web app on it, so it never
+     *   sets the ready signal; its rendered content still counts as
+     *   content here, exactly as before.)
      * - Page finished but body still empty (dead cached shell) -> one
      *   self-heal: clear the WebView cache and reload, overlay stays up.
      * - Still nothing after FIRST_LOAD_TIMEOUT_MS from load start -> show
@@ -1489,14 +1514,26 @@ class MainActivity : AppCompatActivity() {
         webView.evaluateJavascript(
             "(function(){try{var b=document.body;if(!b)return 'empty';" +
                 "var t=(b.innerText||'').trim();" +
-                "return (t.length>0||b.childElementCount>10)?'content':'empty';}" +
+                "if(!(t.length>0||b.childElementCount>10))return 'empty';" +
+                "var ready=document.documentElement.getAttribute('data-frianzo-ready')==='1'||window.__FRIANZO_READY__===true;" +
+                "return ready?'content':'waiting';}" +
                 "catch(e){return 'empty';}})()"
         ) { result ->
             if (loadingOverlayHidden) {
                 stopFirstLoadWatchdog()
                 return@evaluateJavascript
             }
-            val hasContent = result != null && result.contains("content")
+            // 'content' = content rendered AND the web app mounted (ready
+            // signal set). 'waiting' = content rendered but the app has not
+            // mounted yet, so its buttons are still dead. The load-error
+            // page never sets the signal (it is a data URL with no web app
+            // on it), so while it is showing, a 'waiting' result still
+            // counts as content — that branch behaves exactly as before.
+            val hasContent = result != null &&
+                (result.contains("content") ||
+                    (loadErrorShowing && result.contains("waiting")))
+            val hasUnreadyContent = result != null && result.contains("waiting") &&
+                !loadErrorShowing
             when {
                 hasContent -> {
                     stopFirstLoadWatchdog()
@@ -1505,6 +1542,22 @@ class MainActivity : AppCompatActivity() {
                 loadErrorShowing -> {
                     if (elapsedMs >= FIRST_LOAD_TIMEOUT_MS) {
                         stopFirstLoadWatchdog()
+                        hideLoadingOverlay()
+                    } else {
+                        loadingOverlay.postDelayed(firstLoadCheckRunnable, FIRST_LOAD_POLL_MS)
+                    }
+                }
+                hasUnreadyContent -> {
+                    // Content is on screen but the web app has not mounted
+                    // yet, so its buttons are still dead: keep waiting and
+                    // never self-heal over a page that is still booting. If
+                    // the total timeout passes in this state (dead scripts),
+                    // fall back to the load-error page exactly like the
+                    // total-timeout path below — the missing ready signal
+                    // never blocks that path.
+                    if (elapsedMs >= FIRST_LOAD_TIMEOUT_MS) {
+                        stopFirstLoadWatchdog()
+                        showLoadErrorPage(webView, webView.url ?: SITE_URL)
                         hideLoadingOverlay()
                     } else {
                         loadingOverlay.postDelayed(firstLoadCheckRunnable, FIRST_LOAD_POLL_MS)
@@ -1756,10 +1809,10 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             swipeRefresh.isRefreshing = false
             try {
-                Log.i(TAG, "Step 1: Fetching server client ID")
-                val serverClientId = withContext(Dispatchers.IO) { fetchGoogleServerClientId() }
-                require(serverClientId.isNotBlank()) { "Google server client ID is empty" }
-                Log.i(TAG, "Step 1 OK: clientId length=${serverClientId.length}")
+                // The client ID is embedded in the app, so the account
+                // chooser opens immediately - no network fetch comes first.
+                val serverClientId = GOOGLE_SERVER_CLIENT_ID
+                Log.i(TAG, "Step 1: Using the embedded Google client ID")
                 Log.i(TAG, "Step 2: Requesting Google credential")
                 val credentialResult = getGoogleCredential(serverClientId)
                 val credential = credentialResult.response.credential
@@ -1879,67 +1932,62 @@ class MainActivity : AppCompatActivity() {
         }.take(2000)
     }
 
-    private fun fetchGoogleServerClientId(): String {
-        val connection = (URL("$API_URL$GOOGLE_CONFIG_PATH").openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = HTTP_TIMEOUT_MS
-            readTimeout = HTTP_TIMEOUT_MS
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Origin", SITE_URL)
-        }
-
-        return try {
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Empty Google config response (HTTP $responseCode)")
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("Google config request failed: HTTP $responseCode $response")
-            }
-            val root = JSONObject(response)
-            root.getJSONObject("data").getString("clientId")
-        } finally {
-            connection.disconnect()
-        }
-    }
-
     private fun nativeGoogleLogin(idToken: String, nonce: String, deviceToken: String?): NativeLoginResult {
-        val connection = (URL("$API_URL$GOOGLE_NATIVE_LOGIN_PATH").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = HTTP_TIMEOUT_MS
-            readTimeout = HTTP_TIMEOUT_MS
-            doOutput = true
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Origin", SITE_URL)
-        }
-
         val body = JSONObject().apply {
             put("idToken", idToken)
             put("nonce", nonce)
             if (!deviceToken.isNullOrEmpty()) put("deviceToken", deviceToken)
         }.toString()
 
-        return try {
-            connection.outputStream.bufferedWriter().use { it.write(body) }
-            val responseCode = connection.responseCode
-            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader()?.use { it.readText() }
-                ?: throw IllegalStateException("Empty authentication response (HTTP $responseCode)")
-
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("Google authentication failed: HTTP $responseCode $response")
+        // Bounded retry on transient failures only. A network error or a
+        // 408 / 429 / 5xx response can succeed on a later attempt; any other
+        // HTTP answer is final and is thrown at once, exactly as before.
+        var lastError: Exception? = null
+        for (attempt in 1..GOOGLE_LOGIN_MAX_ATTEMPTS) {
+            val connection = (URL("$API_URL$GOOGLE_NATIVE_LOGIN_PATH").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = HTTP_TIMEOUT_MS
+                readTimeout = HTTP_TIMEOUT_MS
+                doOutput = true
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Origin", SITE_URL)
             }
+            try {
+                connection.outputStream.bufferedWriter().use { it.write(body) }
+                val responseCode = connection.responseCode
+                val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+                val response = stream?.bufferedReader()?.use { it.readText() }
+                    ?: throw IllegalStateException("Empty authentication response (HTTP $responseCode)")
 
-            val data = JSONObject(response).getJSONObject("data")
-            NativeLoginResult(
-                token = data.getString("token"),
-                deviceToken = data.getString("deviceToken"),
-                isNewUser = data.getBoolean("isNewUser")
-            )
-        } finally {
-            connection.disconnect()
+                if (responseCode in 200..299) {
+                    val data = JSONObject(response).getJSONObject("data")
+                    return NativeLoginResult(
+                        token = data.getString("token"),
+                        deviceToken = data.getString("deviceToken"),
+                        isNewUser = data.getBoolean("isNewUser")
+                    )
+                }
+
+                val httpError = IllegalStateException(
+                    "Google authentication failed: HTTP $responseCode $response"
+                )
+                if (responseCode == 408 || responseCode == 429 || responseCode >= 500) {
+                    lastError = httpError
+                } else {
+                    throw httpError
+                }
+            } catch (e: IOException) {
+                lastError = e
+            } finally {
+                connection.disconnect()
+            }
+            if (attempt < GOOGLE_LOGIN_MAX_ATTEMPTS) {
+                Log.w(TAG, "Google login attempt $attempt failed; retrying", lastError)
+                Thread.sleep(GOOGLE_LOGIN_RETRY_BASE_DELAY_MS * attempt)
+            }
         }
+        throw lastError ?: IllegalStateException("Google authentication failed")
     }
 
     private fun setAuthCookies(token: String, deviceToken: String) {
