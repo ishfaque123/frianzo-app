@@ -887,6 +887,13 @@ class MainActivity : AppCompatActivity() {
                 loadErrorShowing = false
                 loadErrorUrl = null
                 webView.loadUrl(failed)
+            } else if (isFeedHome(webView.url)) {
+                // Home feed: refresh in place via the web app's own handler
+                // (HomeClient listens for 'frianzo:refresh-feed') instead of
+                // a full WebView reload, so no blank flash.
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new Event('frianzo:refresh-feed'))", null)
+                swipeRefresh.postDelayed({ swipeRefresh.isRefreshing = false }, 1200)
             } else {
                 webView.reload()
             }
@@ -1593,6 +1600,12 @@ class MainActivity : AppCompatActivity() {
         if (oauthUri != null && isOAuthCallback(oauthUri)) {
             handleOAuthCallback(oauthUri)
         }
+    }
+
+    private fun isFeedHome(url: String?): Boolean {
+        val u = Uri.parse(url ?: return false)
+        return (u.host == SITE_HOST || u.host == "www.$SITE_HOST") &&
+            (u.path.isNullOrEmpty() || u.path == "/")
     }
 
     private fun updateSwipeRefreshForUrl(uri: Uri) {
