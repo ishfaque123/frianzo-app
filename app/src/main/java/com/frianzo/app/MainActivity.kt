@@ -737,6 +737,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageStarted(view, url, favicon)
                 if (!url.isNullOrEmpty()) {
                     updateSwipeRefreshForUrl(Uri.parse(url))
+                    updateWebViewBackgroundForUrl(Uri.parse(url))
                     val started = Uri.parse(url)
                     if (started.scheme == "https" && started.host == API_HOST &&
                         started.path?.startsWith("/api/auth/google") == true) {
@@ -1701,6 +1702,29 @@ class MainActivity : AppCompatActivity() {
         // existing pull-to-refresh behavior.
         swipeRefresh.isEnabled = !isNoRefreshSection
         if (isNoRefreshSection) swipeRefresh.isRefreshing = false
+    }
+
+    /**
+     * The PayFast checkout pages ship without a background of their
+     * own, so the WebView background shows through. In dark theme
+     * that background is the app's dark color and the pages' black
+     * text becomes unreadable. Paint the WebView white while a
+     * PayFast page is showing and restore the theme background for
+     * the app's own pages.
+     */
+    private fun updateWebViewBackgroundForUrl(uri: Uri) {
+        val host = uri.host?.lowercase()
+        val isPayFast = host == "ipguat.apps.net.pk" || host == "ipg1.apps.net.pk"
+        webView.setBackgroundColor(
+            ContextCompat.getColor(
+                this,
+                when {
+                    isPayFast -> android.R.color.white
+                    isDarkTheme() -> R.color.frianzo_dark_bg
+                    else -> android.R.color.white
+                }
+            )
+        )
     }
 
     private fun handleUrl(uri: Uri): Boolean {
