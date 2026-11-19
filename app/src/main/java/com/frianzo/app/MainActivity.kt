@@ -99,6 +99,16 @@ class MainActivity : AppCompatActivity() {
     // loadingOverlayHidden). Only a sign-in re-show may hide it again, so
     // this never disturbs the first-load overlay state.
     private var signInOverlayShown = false
+    // Post-login navigation gate: after a successful Google sign-in the
+    // sign-in overlay stays up until the destination page has committed
+    // and rendered, so the login page never flashes back and no blank
+    // screen shows between account selection and the feed. The sign-in
+    // coroutine hands the overlay to this gate on success; the gate hides
+    // it on ready, on the load-error page taking over, or at the timeout.
+    @Volatile private var signInNavPending = false
+    @Volatile private var signInNavCommitted = false
+    private var signInNavStartedAtMs = 0L
+    private val signInNavCheckRunnable = Runnable { checkSignInNavRendered() }
     private var loadingOverlayHidden = false
     // First-load render gate (v23): a finished load is no longer enough to
     // hide the overlay — a stale cached shell can report onPageFinished with
@@ -459,6 +469,7 @@ class MainActivity : AppCompatActivity() {
         // the first page up to a minute from load start to render real
         // content before the load-error page takes over.
         private const val FIRST_LOAD_POLL_MS = 1000L
+        private const val SIGN_IN_NAV_POLL_MS = 500L
         private const val FIRST_LOAD_TIMEOUT_MS = 60000L
         // A healthy page can sit empty for a few seconds while its scripts
         // boot; only a page that stays empty this long after finishing is
@@ -733,6 +744,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            override fun onPageCommitVisible(view: WebView, url: String?) {
+                super.onPageCommitVisible(view, url)
+                // The new page has replaced the old one in the WebView:
+                // only from here can a page probe be trusted to describe
+                // the post-login destination rather than the login page.
+                noteSignInNavCommitted(url)
+            }
+
             override fun onPageFinished(view: WebView, url: String?) {
                 super.onPageFinished(view, url)
                 // A real content page finished loading: the load-error state
@@ -744,6 +763,11 @@ class MainActivity : AppCompatActivity() {
                     loadErrorShowing = false
                     loadErrorUrl = null
                 }
+                // Post-login gate fallback: if the commit callback was
+                // missed on this WebView, a finished page on our own site
+                // also counts as committed. The gate's probe still verifies
+                // the destination rendered before the overlay lifts.
+                noteSignInNavCommitted(url)
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
                 swipeRefresh.isRefreshing = false
                 // v23 render gate: a finished load is not proof of a working
@@ -1844,6 +1868,10 @@ class MainActivity : AppCompatActivity() {
 
                 setAuthCookies(loginResult.token, loginResult.deviceToken)
                 val destination = if (loginResult.isNewUser) "/profile-setup" else "/"
+                // Hand the overlay to the post-login navigation gate: it
+                // stays up until the destination page has committed and
+                // rendered, so no login-page flash or blank screen shows.
+                beginSignInNavGate()
                 webView.loadUrl("$SITE_URL$destination")
                 Log.i(TAG, "Step 5: Cookies set, navigating to $destination")
             } catch (e: GetCredentialCancellationException) {
@@ -1885,7 +1913,109 @@ class MainActivity : AppCompatActivity() {
                 // success, user cancellation, or any error. Without this,
                 // a cancelled picker would leave the button dead.
                 googleSignInInFlight = false
+                // On success the navigation gate owns the overlay now and
+                // hides it once the destination page is ready; every other
+                // outcome hides it here as before.
+                if (!signInNavPending) {
+                    hideSignInOverlay()
+                }
+            }
+        }
+    }
+
+    /**
+     * Arm the post-login navigation gate just before loading the sign-in
+     * destination. The login page's ready signal is cleared first: until
+     * the new page commits, a page probe can still hit the old document,
+     * and its signal must never count as the destination being ready.
+     */
+    private fun beginSignInNavGate() {
+        signInNavPending = true
+        signInNavCommitted = false
+        signInNavStartedAtMs = android.os.SystemClock.elapsedRealtime()
+        try {
+            webView.evaluateJavascript(
+                "window.__FRIANZO_READY__=false;" +
+                    "document.documentElement.removeAttribute('data-frianzo-ready');",
+                null
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Sign-in navigation gate: clearing the old ready signal failed", e)
+        }
+        loadingOverlay.removeCallbacks(signInNavCheckRunnable)
+        loadingOverlay.post(signInNavCheckRunnable)
+    }
+
+    /** Stop the post-login navigation gate (hiding the overlay is separate). */
+    private fun endSignInNavGate() {
+        signInNavPending = false
+        signInNavCommitted = false
+        if (::loadingOverlay.isInitialized) {
+            loadingOverlay.removeCallbacks(signInNavCheckRunnable)
+        }
+    }
+
+    /**
+     * Called from the WebViewClient when a page commits or finishes. Only
+     * a page on our own site can be the post-login destination; anything
+     * else (the load-error data page, an external OAuth page) is ignored.
+     */
+    private fun noteSignInNavCommitted(url: String?) {
+        if (!signInNavPending || signInNavCommitted || url.isNullOrEmpty()) return
+        if (url.startsWith(SITE_URL)) {
+            signInNavCommitted = true
+        }
+    }
+
+    /**
+     * Post-login navigation gate, polled every SIGN_IN_NAV_POLL_MS:
+     * - Our load-error page took over -> lift the overlay so the user can
+     *   see it and use its Retry (the user is already signed in).
+     * - Total timeout -> lift the overlay onto whatever the WebView holds
+     *   rather than trapping the user behind the loading screen.
+     * - Page committed AND rendered real content AND the web app mounted
+     *   (ready signal), on any page other than /login -> hide the overlay.
+     * The /login exclusion plus the commit gate make it impossible for the
+     * old login document to satisfy this check.
+     */
+    private fun checkSignInNavRendered() {
+        if (!signInNavPending) return
+        if (!::webView.isInitialized) {
+            loadingOverlay.postDelayed(signInNavCheckRunnable, SIGN_IN_NAV_POLL_MS)
+            return
+        }
+        if (loadErrorShowing) {
+            endSignInNavGate()
+            hideSignInOverlay()
+            return
+        }
+        val elapsedMs = android.os.SystemClock.elapsedRealtime() - signInNavStartedAtMs
+        if (elapsedMs >= FIRST_LOAD_TIMEOUT_MS) {
+            Log.w(TAG, "Sign-in navigation gate timed out; lifting the overlay")
+            endSignInNavGate()
+            hideSignInOverlay()
+            return
+        }
+        if (!signInNavCommitted) {
+            loadingOverlay.postDelayed(signInNavCheckRunnable, SIGN_IN_NAV_POLL_MS)
+            return
+        }
+        webView.evaluateJavascript(
+            "(function(){try{var p=window.location.pathname||'';" +
+                "if(p.indexOf('/login')===0)return 'waiting';" +
+                "var b=document.body;if(!b)return 'empty';" +
+                "var t=(b.innerText||'').trim();" +
+                "if(!(t.length>0||b.childElementCount>10))return 'empty';" +
+                "var ready=document.documentElement.getAttribute('data-frianzo-ready')==='1'||window.__FRIANZO_READY__===true;" +
+                "return ready?'content':'waiting';}" +
+                "catch(e){return 'empty';}})()"
+        ) { result ->
+            if (!signInNavPending) return@evaluateJavascript
+            if (result != null && result.contains("content")) {
+                endSignInNavGate()
                 hideSignInOverlay()
+            } else {
+                loadingOverlay.postDelayed(signInNavCheckRunnable, SIGN_IN_NAV_POLL_MS)
             }
         }
     }
