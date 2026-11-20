@@ -57,6 +57,7 @@ import androidx.credentials.exceptions.GetCredentialException
 import androidx.lifecycle.lifecycleScope
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.play.core.review.ReviewManagerFactory
 import com.google.firebase.messaging.FirebaseMessaging
 import com.android.installreferrer.api.InstallReferrerClient
 import com.android.installreferrer.api.InstallReferrerStateListener
@@ -222,6 +223,30 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun startReelDownload(url: String): Boolean {
             return enqueueReelDownload(url)
+        }
+
+        // Called by the web side at a calm moment for a returning user.
+        // Shows Google Play's official in-app rating dialog.
+        @JavascriptInterface
+        fun requestReview() {
+            runOnUiThread { launchInAppReview() }
+        }
+    }
+
+    // Google Play in-app review: Google itself decides whether the dialog
+    // actually appears (it has its own quota), and the dialog only exists
+    // when the app was installed from Google Play. Anywhere else, or on any
+    // error, this quietly does nothing.
+    private fun launchInAppReview() {
+        try {
+            val manager = ReviewManagerFactory.create(this)
+            manager.requestReviewFlow().addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    manager.launchReviewFlow(this, task.result)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("FrianzoReview", "In-app review unavailable", e)
         }
     }
 
