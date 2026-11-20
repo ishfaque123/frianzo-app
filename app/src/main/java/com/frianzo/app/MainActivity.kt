@@ -113,15 +113,15 @@ class MainActivity : AppCompatActivity() {
     // First-load render gate (v23): a finished load is no longer enough to
     // hide the overlay — a stale cached shell can report onPageFinished with
     // an empty body and dead scripts, which used to leave a permanent blank
-    // screen. The watchdog below polls the DOM until real content renders,
-    // self-heals once with a cache clear + reload if the finished page is
-    // empty, and shows the load-error page if content never appears.
+    // screen. The watchdog below polls the DOM until real content renders
+    // and shows the load-error page if content never appears.
     @Volatile private var firstPageFinished = false
-    @Volatile private var firstLoadHealAttempted = false
     @Volatile private var firstLoadWatchdogRunning = false
     private var firstLoadStartedAtMs = 0L
-    private var firstEmptyFinishedAtMs = 0L
     private val firstLoadCheckRunnable = Runnable { checkFirstLoadRendered() }
+    // The last real page that finished loading. A renderer crash restores
+    // THIS page, so the user keeps their place instead of landing on Home.
+    @Volatile private var lastLoadedUrl: String? = null
     // FB-style offline recovery: while our own load-error screen is up we
     // remember the failed URL so the app can reload it by itself the moment
     // the network comes back (and pull-to-refresh retries the same page).
@@ -472,10 +472,6 @@ class MainActivity : AppCompatActivity() {
         private const val SIGN_IN_NAV_POLL_MS = 500L
         private const val SIGN_IN_PAINT_FALLBACK_MS = 1500L
         private const val FIRST_LOAD_TIMEOUT_MS = 60000L
-        // A healthy page can sit empty for a few seconds while its scripts
-        // boot; only a page that stays empty this long after finishing is
-        // treated as a dead shell and healed.
-        private const val FIRST_LOAD_HEAL_DELAY_MS = 5000L
         private const val PREFS_NAME = "frianzo_prefs"
         private const val KEY_APP_THEME = "app_theme"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
@@ -765,6 +761,14 @@ class MainActivity : AppCompatActivity() {
                     loadErrorShowing = false
                     loadErrorUrl = null
                 }
+                // Remember the last real page that finished loading, so a
+                // renderer crash can restore this exact page (see
+                // onRenderProcessGone) instead of the home feed.
+                if (!url.isNullOrEmpty() && !url.contains(LOAD_ERROR_MARKER) &&
+                    url.startsWith(SITE_URL)
+                ) {
+                    lastLoadedUrl = url
+                }
                 // Post-login gate fallback: if the commit callback was
                 // missed on this WebView, a finished page on our own site
                 // also counts as committed. The gate's probe still verifies
@@ -819,66 +823,52 @@ class MainActivity : AppCompatActivity() {
                 backCallback.isEnabled = view.canGoBack()
             }
 
-            // Auto-retry on network errors (fixes net::ERR_FAILED permanent)
-            private var retryCount = 0
-            private var lastFailedUrl: String? = null
-
-            // Renderer-crash loop guard: same idea as the network retry limit
-            // above — a few reloads are fine, endless crash -> reload is not.
+            // Renderer-crash loop guard: a few restores are fine, endless
+            // crash -> restore is not.
             private var rendererCrashCount = 0
             private var lastRendererCrashMs = 0L
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
                 super.onReceivedError(view, request, error)
                 if (request.isForMainFrame) {
-                    val url = request.url.toString()
-                    val errorCode = error.errorCode
-                    // Retry on network errors: ERR_FAILED, timeouts, connection issues
-                    if (errorCode == android.webkit.WebViewClient.ERROR_CONNECT ||
-                        errorCode == android.webkit.WebViewClient.ERROR_TIMEOUT ||
-                        errorCode == android.webkit.WebViewClient.ERROR_HOST_LOOKUP ||
-                        errorCode == android.webkit.WebViewClient.ERROR_UNKNOWN
-                    ) {
-                        if (url == lastFailedUrl) retryCount++ else { retryCount = 1; lastFailedUrl = url }
-                        if (retryCount <= 3) {
-                            val delay = when (retryCount) { 1 -> 2000L; 2 -> 5000L; else -> 10000L }
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                view.loadUrl(url)
-                            }, delay)
-                            return // Don't show error page, retrying
-                        }
-                    }
-                    retryCount = 0
-                    lastFailedUrl = null
-                    // Retries exhausted: FB-style recovery — our own error screen
-                    // with a Retry button instead of WebView's dead net::ERR_*
-                    // page, and stop the refresh spinner so it never freezes.
+                    // No silent auto-reload: a failed main-frame load goes
+                    // straight to our own error screen with a Retry button
+                    // (FB-style) instead of WebView's dead net::ERR_* page.
+                    // The error screen reloads this same page by itself when
+                    // the network comes back, and pull-to-refresh retries it
+                    // too — the user's place is never wiped by a background
+                    // reload. Stop the refresh spinner so it never freezes.
                     swipeRefresh.isRefreshing = false
-                    this@MainActivity.showLoadErrorPage(view, url)
+                    this@MainActivity.showLoadErrorPage(view, request.url.toString())
                 }
             }
 
             override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {
-                // WebView renderer crashed - reload a few times, then stop:
-                // without a limit, a page that crashes on load loops forever
-                // (crash -> reload -> crash). After 3 crashes within 60s,
-                // show the error screen and let the user retry manually.
+                // WebView renderer crashed: restore the page the user was
+                // actually on — never drop them on the home feed. Restore a
+                // few times, then stop: without a limit, a page that crashes
+                // on load loops forever (crash -> restore -> crash). After 3
+                // crashes within 60s, show the error screen for that same
+                // page and let the user retry manually.
                 val now = android.os.SystemClock.elapsedRealtime()
                 if (now - lastRendererCrashMs > 60_000L) rendererCrashCount = 0
                 lastRendererCrashMs = now
                 rendererCrashCount++
+                val target = lastLoadedUrl
+                    ?: try { view.url } catch (e: Exception) { null }
+                    ?: SITE_URL
                 if (rendererCrashCount > 3) {
                     rendererCrashCount = 0
                     Log.e(TAG, "WebView renderer crashed repeatedly, showing error page")
                     swipeRefresh.isRefreshing = false
-                    this@MainActivity.showLoadErrorPage(view, SITE_URL)
+                    this@MainActivity.showLoadErrorPage(view, target)
                     return true
                 }
-                Log.e(TAG, "WebView renderer crashed, reloading")
+                Log.e(TAG, "WebView renderer crashed, restoring current page")
                 try {
-                    view.loadUrl(SITE_URL)
+                    view.loadUrl(target)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to reload WebView", e)
+                    Log.e(TAG, "Failed to restore WebView page", e)
                 }
                 return true
             }
@@ -1026,7 +1016,7 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * FB-style load-failure screen: our own dark page with a Retry button,
-     * shown when a page load fails after auto-retries are exhausted — instead
+     * shown as soon as a page load fails — instead
      * of WebView's dead net::ERR_* page (which made the app look frozen).
      * The Retry link reloads the failed URL inside the WebView (same-host
      * links are allowed through handleUrl).
@@ -1521,8 +1511,10 @@ class MainActivity : AppCompatActivity() {
      *   (The error page is a data URL with no web app on it, so it never
      *   sets the ready signal; its rendered content still counts as
      *   content here, exactly as before.)
-     * - Page finished but body still empty (dead cached shell) -> one
-     *   self-heal: clear the WebView cache and reload, overlay stays up.
+     * - Page finished but body still empty (dead cached shell) -> keep
+     *   polling; at the total timeout the load-error page takes over. No
+     *   silent cache clear + reload: that restarted the whole first load
+     *   from zero on slow connections.
      * - Still nothing after FIRST_LOAD_TIMEOUT_MS from load start -> show
      *   the load-error page and lift the overlay onto it.
      * No path leaves a bare blank screen behind the overlay.
@@ -1588,26 +1580,6 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         loadingOverlay.postDelayed(firstLoadCheckRunnable, FIRST_LOAD_POLL_MS)
                     }
-                }
-                firstPageFinished && !firstLoadHealAttempted -> {
-                    // Heal only a PERSISTENTLY empty finished page: a healthy
-                    // page may sit empty briefly while its scripts boot, and
-                    // clearing the cache mid-boot on a slow connection would
-                    // restart a load that was about to succeed.
-                    if (firstEmptyFinishedAtMs == 0L) {
-                        firstEmptyFinishedAtMs = android.os.SystemClock.elapsedRealtime()
-                    }
-                    if (android.os.SystemClock.elapsedRealtime() - firstEmptyFinishedAtMs >= FIRST_LOAD_HEAL_DELAY_MS) {
-                        firstLoadHealAttempted = true
-                        Log.w(TAG, "First load finished with an empty page; clearing cache and reloading once")
-                        try {
-                            webView.clearCache(true)
-                            webView.reload()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "First-load self-heal failed", e)
-                        }
-                    }
-                    loadingOverlay.postDelayed(firstLoadCheckRunnable, FIRST_LOAD_POLL_MS)
                 }
                 elapsedMs >= FIRST_LOAD_TIMEOUT_MS -> {
                     stopFirstLoadWatchdog()
