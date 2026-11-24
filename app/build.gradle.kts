@@ -35,7 +35,12 @@ android {
         }
         release {
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
+            // R8 code shrinking/obfuscation and resource shrinking for the
+            // Play build (Google's vitals recommendation). The JavaScript
+            // bridge keeps in proguard-rules.pro are required for this to be
+            // safe: without them the FrianzoNative bridge would break.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

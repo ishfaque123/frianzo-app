@@ -132,6 +132,9 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var pushToken: String = ""
     @Volatile private var installReferrer: String? = null
     @Volatile private var referralClaimed: Boolean = false
+    // Guards startDeferredStartupTasks(): the deferred work runs exactly
+    // once per activity instance, when the first-load overlay lifts.
+    @Volatile private var deferredStartupTasksStarted = false
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
     private var pendingWebAudioPermissionRequest: PermissionRequest? = null
@@ -569,8 +572,14 @@ class MainActivity : AppCompatActivity() {
         startFirstLoadWatchdog()
         credentialManager = CredentialManager.create(this)
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
-        loadInstallReferrer()
-        setupPush()
+        // Only the notification channel is created up front: it is a single
+        // cheap call and a push must be able to post from the very first
+        // moment. The install-referrer fetch and the rest of the push setup
+        // are not needed for first paint and used to run here, inside the
+        // critical startup window; they now start from
+        // startDeferredStartupTasks() once the first page has rendered
+        // (see hideLoadingOverlay()).
+        createNotificationChannel()
         registerNetworkRecoveryCallback()
 
         webView.settings.apply {
@@ -1213,33 +1222,66 @@ class MainActivity : AppCompatActivity() {
         webView.post { webView.evaluateJavascript(script, null) }
     }
 
-    private fun loadInstallReferrer() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val client = InstallReferrerClient.newBuilder(this@MainActivity).build()
-            try {
-                client.startConnection(object : InstallReferrerStateListener {
-                    override fun onInstallReferrerSetupFinished(responseCode: Int) {
-                        if (responseCode == InstallReferrerClient.InstallReferrerResponse.OK) {
-                            try {
-                                installReferrer = client.installReferrer.installReferrer
-                                Log.i(TAG, "Play Install Referrer loaded")
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Could not read Play Install Referrer", e)
-                            }
-                        } else {
-                            Log.i(TAG, "Play Install Referrer unavailable: $responseCode")
-                        }
-                        client.endConnection()
-                    }
+    /**
+     * Startup work that is not needed for first paint and therefore no
+     * longer runs inside onCreate: the Play install-referrer fetch and the
+     * push setup (permission prompt + FCM token fetch). Called exactly once,
+     * when the first-load overlay lifts — i.e. after the first page has
+     * rendered. Neither consumer is time-critical: the referrer is only read
+     * by tryClaimReferral() and the FrianzoNative bridge, and the push token
+     * reaches the web app through the same bridge/event path as before, just
+     * a moment later.
+     */
+    private fun startDeferredStartupTasks() {
+        if (deferredStartupTasksStarted) return
+        deferredStartupTasksStarted = true
+        loadInstallReferrer()
+        setupPush()
+    }
 
-                    override fun onInstallReferrerServiceDisconnected() {
-                        Log.i(TAG, "Play Install Referrer service disconnected")
+    private fun loadInstallReferrer() {
+        val client = InstallReferrerClient.newBuilder(this).build()
+        try {
+            client.startConnection(object : InstallReferrerStateListener {
+                override fun onInstallReferrerSetupFinished(responseCode: Int) {
+                    // The Play library delivers this callback on the main
+                    // thread, and client.installReferrer is a synchronous
+                    // IPC read into the Play Store service: reading it here
+                    // used to block the main thread long enough to ANR on
+                    // low-end devices (the Play Console "Input dispatching
+                    // timed out" cluster for this callback). Read the value
+                    // and close the connection on a background thread.
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try {
+                            if (responseCode == InstallReferrerClient.InstallReferrerResponse.OK) {
+                                try {
+                                    installReferrer = client.installReferrer.installReferrer
+                                    Log.i(TAG, "Play Install Referrer loaded")
+                                    // The claim check on the first page
+                                    // finish ran before the referrer was
+                                    // available; run it again now that the
+                                    // value is here, on the main thread as
+                                    // before.
+                                    runOnUiThread { tryClaimReferral() }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Could not read Play Install Referrer", e)
+                                }
+                            } else {
+                                Log.i(TAG, "Play Install Referrer unavailable: $responseCode")
+                            }
+                        } finally {
+                            try { client.endConnection() } catch (_: Exception) {}
+                        }
                     }
-                })
-            } catch (e: Exception) {
-                Log.w(TAG, "Play Install Referrer setup failed", e)
-                try { client.endConnection() } catch (_: Exception) {}
-            }
+                }
+
+                override fun onInstallReferrerServiceDisconnected() {
+                    Log.i(TAG, "Play Install Referrer service disconnected")
+                }
+            })
+        } catch (e: Exception) {
+            Log.w(TAG, "Play Install Referrer setup failed", e)
+            try { client.endConnection() } catch (_: Exception) {}
         }
     }
 
@@ -1620,6 +1662,11 @@ class MainActivity : AppCompatActivity() {
     private fun hideLoadingOverlay() {
         if (loadingOverlayHidden) return
         loadingOverlayHidden = true
+        // The overlay only lifts once real content has rendered, so this is
+        // the first-paint moment: safe to start the work that was deferred
+        // out of onCreate. Every overlay path (rendered content, load-error
+        // page, total timeout) ends here, so the deferred work always runs.
+        startDeferredStartupTasks()
         dotAnimators.forEach { it.cancel() }
         dotAnimators.clear()
         loadingOverlay.animate()
