@@ -83,6 +83,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var backCallback: OnBackPressedCallback
     private lateinit var swipeRefresh: SwipeRefreshLayout
+    // STALE-FEED FIX (2026-11-28): pull-to-refresh on the home feed used
+    // to hide the spinner on a fixed 1.2-second timer, while the real
+    // feed load takes many seconds — the user scrolled before the load
+    // returned and the web swap rule then refused to show the fresh
+    // page. The spinner now stays up until the web signals the load
+    // finished ('frianzo:refresh-done' -> onFeedRefreshDone), with this
+    // 60-second backstop so a missed signal can never leave it up
+    // forever.
+    private val feedRefreshTimeoutRunnable = Runnable { swipeRefresh.isRefreshing = false }
     private lateinit var credentialManager: CredentialManager
     private lateinit var loadingOverlay: View
     private val dotAnimators = mutableListOf<ObjectAnimator>()
@@ -230,6 +239,17 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun requestReview() {
             runOnUiThread { launchInAppReview() }
+        }
+
+        // STALE-FEED FIX (2026-11-28): called by the web feed (via the
+        // 'frianzo:refresh-done' forwarder installed in onPageFinished)
+        // when a feed load finishes, so the pull-to-refresh spinner hides
+        // only once fresh data is actually in. Bridge methods run on a
+        // background thread — hop to the UI thread before touching the
+        // view.
+        @JavascriptInterface
+        fun onFeedRefreshDone() {
+            runOnUiThread { stopFeedRefreshSpinner() }
         }
     }
 
@@ -800,6 +820,20 @@ class MainActivity : AppCompatActivity() {
                 // the destination rendered before the overlay lifts.
                 noteSignInNavCommitted(url)
                 if (!url.isNullOrEmpty()) updateSwipeRefreshForUrl(Uri.parse(url))
+                // STALE-FEED FIX (2026-11-28): forward the web feed's
+                // 'frianzo:refresh-done' event to the native bridge, so
+                // the pull-to-refresh spinner hides when the load
+                // finishes instead of on a fixed timer. Installed once
+                // per page (the window flag survives SPA navigation, and
+                // a full reload re-runs onPageFinished and re-installs
+                // it); the guard keeps duplicate listeners from piling
+                // up on repeat finishes.
+                webView.evaluateJavascript(
+                    "if (!window.__frianzoRefreshDoneHook) { window.__frianzoRefreshDoneHook = true; " +
+                    "window.addEventListener('frianzo:refresh-done', function() { " +
+                    "if (window.FrianzoNative) window.FrianzoNative.onFeedRefreshDone(); }); }",
+                    null
+                )
                 swipeRefresh.isRefreshing = false
                 // v23 render gate: a finished load is not proof of a working
                 // page — a stale cached shell finishes with an empty body and
@@ -947,7 +981,17 @@ class MainActivity : AppCompatActivity() {
                 // a full WebView reload, so no blank flash.
                 webView.evaluateJavascript(
                     "window.dispatchEvent(new Event('frianzo:refresh-feed'))", null)
-                swipeRefresh.postDelayed({ swipeRefresh.isRefreshing = false }, 1200)
+                // STALE-FEED FIX (2026-11-28): the spinner used to hide
+                // on a fixed 1.2-second timer while the real feed load
+                // takes many seconds, so the user scrolled before the
+                // load returned and the web swap rule then refused to
+                // show the fresh page. Keep the spinner up until the
+                // web signals the load finished ('frianzo:refresh-done'
+                // -> NativeBridge.onFeedRefreshDone), with a 60-second
+                // backstop so a missed signal can never leave it up
+                // forever.
+                swipeRefresh.removeCallbacks(feedRefreshTimeoutRunnable)
+                swipeRefresh.postDelayed(feedRefreshTimeoutRunnable, 60_000)
             } else {
                 webView.reload()
             }
@@ -1676,6 +1720,15 @@ class MainActivity : AppCompatActivity() {
         if (oauthUri != null && isOAuthCallback(oauthUri)) {
             handleOAuthCallback(oauthUri)
         }
+    }
+
+    // STALE-FEED FIX (2026-11-28): hide the pull-to-refresh spinner and
+    // cancel its 60-second backstop. Called when the web feed signals
+    // its load finished (NativeBridge.onFeedRefreshDone). Safe to call
+    // when the spinner is already hidden.
+    private fun stopFeedRefreshSpinner() {
+        swipeRefresh.removeCallbacks(feedRefreshTimeoutRunnable)
+        swipeRefresh.isRefreshing = false
     }
 
     private fun isFeedHome(url: String?): Boolean {
