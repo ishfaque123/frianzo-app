@@ -190,9 +190,15 @@ class MainActivity : AppCompatActivity() {
         // app is force-closed right after logging out, the deletion can be
         // lost and the old session cookie comes back on next launch. This
         // forces the cleared cookie state to disk immediately.
+        // Both callers are logout paths (Shell drawer logout and the
+        // settings-menu logout, after logoutRequest() succeeds) — never a
+        // mid-login flow — so this is also the session-end hook: any photo
+        // staged by a share intent in the old session is deleted here, with
+        // its token, so it cannot linger into the next guest session.
         @JavascriptInterface
         fun flushCookies() {
             CookieManager.getInstance().flush()
+            clearStagedShares()
         }
 
         // Called by the web ThemeProvider whenever the theme is applied, so the
@@ -301,15 +307,6 @@ class MainActivity : AppCompatActivity() {
     private var pendingStartUrl: String? = null
 
     /**
-     * Deep link a user tapped outside the app (e.g. a shared link in
-     * WhatsApp) that must survive the login step: when the app starts
-     * logged out, the web login always lands on the home feed, so the
-     * target is remembered here and loaded from onPageFinished once the
-     * home feed finishes loading with a fresh auth session.
-     */
-    private var pendingDeepLinkUrl: String? = null
-
-    /**
      * Returns the tapped URL only for a genuine VIEW intent to our own
      * site. Host and scheme are validated before trusting it, so no other
      * app's link can make the WebView open an arbitrary site through this
@@ -343,7 +340,12 @@ class MainActivity : AppCompatActivity() {
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
                     // Cancel/error: wipe ONLY the login session (device cookie stays),
-                    // then open password login — it cannot auto-login now
+                    // then open the guest feed — the session is gone, so the
+                    // user is a guest now and the feed is the logged-out
+                    // start page. The remembered start URL (feed or tapped
+                    // deep link) is kept, so a cancelled prompt never
+                    // drops the user on the wrong page.
+                    val target = pendingStartUrl ?: SITE_URL
                     pendingStartUrl = null
                     val cookieManager = CookieManager.getInstance()
                     val expire = "Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; Secure; SameSite=None; Domain=.frianzo.online"
@@ -352,7 +354,7 @@ class MainActivity : AppCompatActivity() {
                     cookieManager.setCookie(SITE_URL, "vynzo_auth_token=; $expire")
                     cookieManager.setCookie(SITE_URL, "vynzo_token=; $expire")
                     cookieManager.flush()
-                    webView.loadUrl("$SITE_URL/login")
+                    webView.loadUrl(target)
                 }
             })
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
@@ -521,6 +523,13 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_APP_THEME = "app_theme"
         private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
         private const val KEY_REFERRAL_CLAIMED = "referral_claimed"
+        // Persisted staged shares (share-intent files): one entry per
+        // line, "token<TAB>absolutePath<TAB>mimeType<TAB>Uri-encoded name".
+        // The token -> file mapping must survive a process restart while
+        // the user is on the login page, or the shared photo is lost.
+        private const val KEY_STAGED_SHARES = "staged_shares"
+        // Staged share files older than this are pruned on startup.
+        private const val STAGED_SHARE_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -590,7 +599,16 @@ class MainActivity : AppCompatActivity() {
         credentialManager = CredentialManager.create(this)
         webView.addJavascriptInterface(NativeBridge(), "FrianzoNative")
         loadInstallReferrer()
-        setupPush()
+        // Push setup (notification permission + FCM token) runs only for
+        // a signed-in user: a guest must never burn the one-time system
+        // permission ask. After a sign-in the shell calls setupPush()
+        // again from the sign-in success path; a web sign-in is covered
+        // on the next cold start, when the session cookie exists.
+        if (hasAuthSession()) setupPush()
+        // A staged share file must survive the login flow (and a process
+        // restart while the user is on the login page): reload any
+        // persisted staged shares before the first page loads.
+        restoreStagedShares()
         registerNetworkRecoveryCallback()
 
         webView.settings.apply {
@@ -843,18 +861,6 @@ class MainActivity : AppCompatActivity() {
                     firstPageFinished = true
                     startFirstLoadWatchdog()
                 }
-                // A remembered shared-link target survives login: the web
-                // login always lands on the home feed, so once that feed
-                // finishes with a fresh auth session, jump to the target.
-                // pendingDeepLinkUrl is cleared before loading, so the
-                // target's own finish can never loop back here.
-                val pendingDeepLink = pendingDeepLinkUrl
-                if (pendingDeepLink != null && hasAuthSession() &&
-                    (url == SITE_URL || url == "$SITE_URL/")
-                ) {
-                    pendingDeepLinkUrl = null
-                    webView.loadUrl(pendingDeepLink)
-                }
                 tryClaimReferral()
                 // Proactively request camera permission on camera page so that
                 // when the website calls getUserMedia, the permission is already
@@ -1010,20 +1016,18 @@ class MainActivity : AppCompatActivity() {
                     webView.post { handleOAuthCallback(oauthUri) }
                 } else {
                     // Shared-link tap: open the tapped URL itself, not the
-                    // home feed. Logged out, remember it so the login step
-                    // (which always lands on home) can return to it.
+                    // home feed — even when logged out. The website's
+                    // login prompt handles gated destinations; the shell
+                    // never routes a guest to /login and never remembers
+                    // the target for after login.
                     val deepLink = deepLinkUrl(intent)
-                    if (deepLink != null && !hasAuthSession()) {
-                        pendingDeepLinkUrl = deepLink
-                    }
                     val startUrl = deepLink
                         ?: notificationTargetUrl(intent) ?: defaultStartUrl()
-                    // If biometric login is enabled, ask for fingerprint before loading
-                    if (isBiometricEnabledForLaunch()) {
+                    // Biometric launch lock is for signed-in users only:
+                    // a guest must never see a fingerprint prompt.
+                    if (hasAuthSession() && isBiometricEnabledForLaunch()) {
                         pendingStartUrl = startUrl
                         showBiometricPromptForLaunch()
-                    } else if (deepLink != null && !hasAuthSession()) {
-                        webView.loadUrl("$SITE_URL/login")
                     } else {
                         webView.loadUrl(startUrl)
                     }
@@ -1305,6 +1309,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun tryClaimReferral() {
+        // Guest sessions must never attempt a referral claim: a claim is
+        // only meaningful for a signed-in user. Nothing is marked claimed
+        // here, so a guest install with a referral retries on the first
+        // page finish after login instead of being silently dropped.
+        if (!hasAuthSession()) return
         if (referralClaimed) return
         val referrer = installReferrer?.trim().orEmpty()
         if (referrer.isEmpty()) return
@@ -1498,6 +1507,7 @@ class MainActivity : AppCompatActivity() {
             val token = UUID.randomUUID().toString()
             val share = StagedShare(dest, mime, name)
             stagedShares[token] = share
+            persistStagedShare(token, share)
             token to share
         } catch (e: Exception) {
             Log.w(TAG, "Failed to stage shared file", e)
@@ -1508,6 +1518,74 @@ class MainActivity : AppCompatActivity() {
     private fun clearStagedShares() {
         stagedShares.values.forEach { runCatching { it.file.delete() } }
         stagedShares.clear()
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .remove(KEY_STAGED_SHARES).apply()
+    }
+
+    /**
+     * Persist one staged share (share-intent file) so the token -> file
+     * mapping survives a process restart. The staged file itself already
+     * lives in native storage (cacheDir/share_inbox); without this, the
+     * in-memory map is empty after a restart and /__share/<token> can
+     * never resolve — the shared photo would be lost if Android killed
+     * the app while the user was on the login page (e.g. during the
+     * external Google OAuth flow, which leaves the app).
+     */
+    private fun persistStagedShare(token: String, share: StagedShare) {
+        val entry = listOf(token, share.file.absolutePath, share.mimeType, Uri.encode(share.name))
+            .joinToString("\t")
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val updated = prefs.getStringSet(KEY_STAGED_SHARES, emptySet())?.toMutableSet()
+            ?: mutableSetOf()
+        updated.add(entry)
+        prefs.edit().putStringSet(KEY_STAGED_SHARES, updated).apply()
+    }
+
+    /**
+     * Reload persisted staged shares into the in-memory map, before the
+     * first page loads. Entries whose file is gone are dropped, and
+     * staged files older than STAGED_SHARE_MAX_AGE_MS are pruned, so the
+     * share inbox can never fill the cache with forgotten photos.
+     */
+    private fun restoreStagedShares() {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val stored = prefs.getStringSet(KEY_STAGED_SHARES, emptySet()) ?: return
+        if (stored.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val kept = mutableSetOf<String>()
+        var changed = false
+        for (entry in stored) {
+            val parts = entry.split("\t")
+            if (parts.size != 4) {
+                changed = true
+                continue
+            }
+            val (token, path, mime, encodedName) = parts
+            val file = File(path)
+            if (!file.exists() || file.length() == 0L ||
+                now - file.lastModified() > STAGED_SHARE_MAX_AGE_MS
+            ) {
+                runCatching { file.delete() }
+                changed = true
+                continue
+            }
+            stagedShares[token] = StagedShare(file, mime, Uri.decode(encodedName))
+            kept.add(entry)
+        }
+        // Prune orphaned files in the share inbox (e.g. left behind if
+        // the app was killed mid-stage): only files with no kept entry.
+        runCatching {
+            File(cacheDir, "share_inbox").listFiles()?.forEach { file ->
+                if (file.isFile && now - file.lastModified() > STAGED_SHARE_MAX_AGE_MS &&
+                    kept.none { it.split("\t").getOrNull(1) == file.absolutePath }
+                ) {
+                    file.delete()
+                }
+            }
+        }
+        if (changed) {
+            prefs.edit().putStringSet(KEY_STAGED_SHARES, kept).apply()
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -1683,12 +1761,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Start on /login when there is no auth session, so a logged-out user never
-     * sees the SSR marketing page flash inside the app's WebView before the
-     * web client redirects. Logged-in users still land on the feed via SITE_URL.
+     * The guest feed is the start page for everyone: a logged-out user
+     * opens the feed directly, never the login page. Login happens only
+     * from the website's login prompt when the user takes a gated action.
      */
-    private fun defaultStartUrl(): String =
-        if (hasAuthSession()) SITE_URL else "$SITE_URL/login"
+    private fun defaultStartUrl(): String = SITE_URL
 
     private fun hasAuthSession(): Boolean =
         !getCookieValue("vynzo_auth_token").isNullOrBlank() ||
@@ -1703,16 +1780,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
         // Shared-link tap while the app is already running: navigate to
-        // the tapped URL instead of staying on the current page. Logged
-        // out, go to login and remember the target (see pendingDeepLinkUrl).
+        // the tapped URL instead of staying on the current page — even
+        // when logged out. The website's login prompt handles gated
+        // destinations for guests.
         val deepLink = deepLinkUrl(intent)
         if (deepLink != null) {
-            if (hasAuthSession()) {
-                webView.loadUrl(deepLink)
-            } else {
-                pendingDeepLinkUrl = deepLink
-                webView.loadUrl("$SITE_URL/login")
-            }
+            webView.loadUrl(deepLink)
             return
         }
         notificationTargetUrl(intent)?.let { webView.loadUrl(it) }
@@ -1965,6 +2038,9 @@ class MainActivity : AppCompatActivity() {
                 Log.i(TAG, "Step 4 OK: backend auth success, isNewUser=${loginResult.isNewUser}")
 
                 setAuthCookies(loginResult.token, loginResult.deviceToken)
+                // Signed in now: ask for the notification permission and
+                // fetch the push token (skipped for guests at startup).
+                setupPush()
                 val destination = if (loginResult.isNewUser) "/profile-setup" else "/"
                 // Hand the overlay to the post-login navigation gate: it
                 // stays up until the destination page has committed and
@@ -2335,6 +2411,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         setAuthCookies(token, deviceToken)
+        // Signed in now: ask for the notification permission and fetch
+        // the push token (skipped for guests at startup).
+        setupPush()
         val destination = if (isNewUser) "/profile-setup" else "/"
         webView.loadUrl("$SITE_URL$destination")
     }
